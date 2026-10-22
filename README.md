@@ -44,14 +44,14 @@ app/src/test/  Headless Robolectric unit tests
 Requires JDK 17 and Android SDK (`platforms;android-34`, `build-tools;34.0.0`).
 
 ```bash
-./build.sh                 # interactive menu: 1) APK only  2) Release (build + tag)
-./build.sh apk             # compile signed R8-optimized AeraRead-1.0.apk
-./build.sh release v1.0    # compile APK and create git release tag
-./build.sh test            # run unit test suite
-./build.sh lint            # run Android lint
-./build.sh clean           # delete build outputs
+bash build.sh                 # interactive menu: 1) APK only  2) Release (build + tag)
+bash build.sh apk             # compile signed R8-optimized AeraRead-1.0.apk
+bash build.sh release v1.0    # compile APK and create git release tag
+bash build.sh test            # run unit test suite
+bash build.sh lint            # run Android lint
+bash build.sh clean           # delete build outputs
 ```
 
-On GitHub Actions (`.github/workflows/build.yml`), trigger **Run workflow** and select **Build target**:
+GitHub Actions (`.github/workflows/build.yml`) runs manually only (`workflow_dispatch` — never auto-triggered on push). Open **Actions → Build APK → Run workflow** and select **Build target**:
 - **Actions only** — compiles `AeraRead-1.0.apk` and uploads it as a workflow artifact.
 - **Release** — compiles `AeraRead-1.0.apk`, uploads the workflow artifact, tags the commit, and publishes a GitHub Release.
