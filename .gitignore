@@ -1,0 +1,17 @@
+# build output
+.gradle/
+build/
+app/build/
+captures/
+*.apk
+
+# local machine settings
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# signing material never goes into the repository; CI restores it from secrets
+keystore.properties
+*.jks
+*.keystore

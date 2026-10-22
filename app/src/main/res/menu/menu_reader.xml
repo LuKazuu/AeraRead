@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_bookmark"
+        android:icon="@drawable/ic_bookmark_border"
+        android:title="@string/add_bookmark"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_toc"
+        android:icon="@drawable/ic_toc"
+        android:title="@string/toc"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_appearance"
+        android:icon="@drawable/ic_text_format"
+        android:title="@string/appearance"
+        app:showAsAction="always" />
+</menu>

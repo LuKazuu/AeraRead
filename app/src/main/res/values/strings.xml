@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Aera Read</string>
+    <string name="library">Library</string>
+    <string name="add_folder">Add folder</string>
+    <string name="folders">Folders</string>
+    <string name="scan_now">Scan folders</string>
+    <string name="scanning">Scanning folders…</string>
+    <string name="add_folder_row">Add folder</string>
+    <string name="no_folders">No folders added.</string>
+    <string name="folder_lost">Can’t read a folder anymore. Add it again.</string>
+    <string name="empty_title">No books yet</string>
+    <string name="empty_body">Choose a folder with EPUB or PDF books. Files stay where they are.</string>
+    <string name="page_of">Page %1$d of %2$d</string>
+    <string name="percent">%1$d%%</string>
+    <string name="preparing">Preparing…</string>
+    <string name="contents">Contents</string>
+    <string name="bookmarks">Bookmarks</string>
+    <string name="navigate">Navigate</string>
+    <string name="no_bookmarks">No bookmarks yet.</string>
+    <string name="appearance">Appearance</string>
+    <string name="theme">Theme</string>
+    <string name="font">Font</string>
+    <string name="manage">Manage</string>
+    <string name="size">Size</string>
+    <string name="line_spacing">Line spacing</string>
+    <string name="view_mode">View mode</string>
+    <string name="view_scroll">Scroll</string>
+    <string name="view_pages">Pages</string>
+    <string name="page_turn">Page turn</string>
+    <string name="ltr">L/R</string>
+    <string name="rtl">R/L</string>
+    <string name="keep_screen_on">Keep screen on</string>
+    <string name="add_bookmark">Add bookmark</string>
+    <string name="remove_bookmark">Remove bookmark</string>
+    <string name="bookmark_added">Bookmark added</string>
+    <string name="bookmark_removed">Bookmark removed</string>
+    <string name="open">Open</string>
+    <string name="remove">Remove</string>
+    <string name="remove_title">Remove from library?</string>
+    <string name="remove_body">“%1$s” will be removed from your library. The file stays on your device.</string>
+    <string name="cancel">Cancel</string>
+    <string name="open_failed">Couldn’t open this book</string>
+    <string name="back">Back</string>
+    <string name="book_actions">Book options</string>
+    <string name="no_author">No author</string>
+    <string name="page_n">Page %1$d</string>
+    <string name="toc">Contents</string>
+    <string name="scan_result">%1$d found · %2$d new</string>
+    <string name="scan_failed">%1$d could not be opened</string>
+    <string name="book_meta">%1$s · %2$s</string>
+    <string name="appearance_pdf_note">Text settings don’t apply to PDFs.</string>
+    <string name="fonts">Fonts</string>
+    <string name="fonts_note">Downloaded once, then work offline.</string>
+    <string name="fonts_latin">Latin</string>
+    <string name="fonts_cjk">CJK</string>
+    <string name="font_download_size">Download · %1$s</string>
+    <string name="font_preview_latin" translatable="false">Aa</string>
+    <string name="font_preview_cjk" translatable="false">字</string>
+    <string name="font_installed">Installed</string>
+    <string name="font_downloading">Downloading…</string>
+    <string name="font_downloading_percent">Downloading… %1$d%%</string>
+    <string name="font_download_failed">Download failed — tap to retry</string>
+</resources>
