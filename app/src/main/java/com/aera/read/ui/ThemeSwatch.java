@@ -1,7 +1,6 @@
 package com.aera.read.ui;
 
 import android.content.Context;
-import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -14,7 +13,7 @@ import com.aera.read.util.Ui;
 /** Circular preview of a reader color theme. */
 public class ThemeSwatch extends View {
 
-    private ReaderTheme theme = ReaderTheme.PAPER;
+    private ReaderTheme theme = ReaderTheme.LIGHT;
     private boolean selected;
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -49,9 +48,7 @@ public class ThemeSwatch extends View {
         float circleRadius = ringRadius - Ui.dpf(getContext(), 5);
 
         if (selected) {
-            boolean nightUi = (getResources().getConfiguration().uiMode
-                    & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-            ring.setColor(nightUi ? Color.WHITE
+            ring.setColor(Ui.isNightUi(getContext()) ? Color.WHITE
                     : Ui.colorAttr(getContext(), com.google.android.material.R.attr.colorOnSurface));
             canvas.drawCircle(cx, cy, ringRadius, ring);
         }

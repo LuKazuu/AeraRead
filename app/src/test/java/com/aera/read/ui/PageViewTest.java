@@ -90,9 +90,9 @@ public class PageViewTest {
         assertTrue("light glyphs are visible on the night background",
                 hasBrightPixel(night, 150));
 
-        view.setData(paged, paged.page(6), ReaderTheme.PAPER, null);
-        Bitmap paper = render(view, ReaderTheme.PAPER, 800, 1200);
-        assertEquals(ReaderTheme.PAPER.bg, paper.getPixel(2, 2));
+        view.setData(paged, paged.page(6), ReaderTheme.LIGHT, null);
+        Bitmap paper = render(view, ReaderTheme.LIGHT, 800, 1200);
+        assertEquals(ReaderTheme.LIGHT.bg, paper.getPixel(2, 2));
         assertNotEquals("pixel colors differ between themes",
                 night.getPixel(400, 600), paper.getPixel(400, 600));
     }
@@ -102,11 +102,11 @@ public class PageViewTest {
         PagedBook paged = paginate();
         PageView view = new PageView(app);
         view.setPadding(40, 60, 40, 46);
-        view.setData(paged, paged.page(6), ReaderTheme.PAPER, null);
-        Bitmap bmp = render(view, ReaderTheme.PAPER, 800, 1200);
+        view.setData(paged, paged.page(6), ReaderTheme.LIGHT, null);
+        Bitmap bmp = render(view, ReaderTheme.LIGHT, 800, 1200);
         boolean footerInk = false;
         for (int x = 0; x < 800; x++) {
-            if (bmp.getPixel(x, 1180) != ReaderTheme.PAPER.bg) footerInk = true;
+            if (bmp.getPixel(x, 1180) != ReaderTheme.LIGHT.bg) footerInk = true;
         }
         assertFalse("page number is drawn in the bottom bar, not on the page", footerInk);
     }
@@ -122,9 +122,9 @@ public class PageViewTest {
             boolean imagePage = false;
             for (PagedBook.Segment seg : page.segments) imagePage |= seg.isImage();
             if (!imagePage) continue;
-            view.setData(paged, page, ReaderTheme.PAPER, null);
-            Bitmap bmp = render(view, ReaderTheme.PAPER, 800, 1200);
-            assertEquals(ReaderTheme.PAPER.bg, bmp.getPixel(2, 2));
+            view.setData(paged, page, ReaderTheme.LIGHT, null);
+            Bitmap bmp = render(view, ReaderTheme.LIGHT, 800, 1200);
+            assertEquals(ReaderTheme.LIGHT.bg, bmp.getPixel(2, 2));
             rendered++;
         }
         assertTrue("illustration pages rendered", rendered > 0);

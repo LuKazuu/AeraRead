@@ -1,14 +1,16 @@
 package com.aera.read.epub;
 
-import android.content.ComponentCallbacks2;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.LruCache;
 
 import com.aera.read.io.ZipArchive;
+import com.aera.read.util.Ui;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collections;
@@ -22,15 +24,13 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Decodes and caches illustrations from the EPUB archive. Decoding never happens on the
- * thread that draws: a caller gets the best bitmap already in memory and asks for a finer
- * one, which arrives later and repaints the page.
+ * Decodes and caches illustrations and inline gaiji/icons from the EPUB archive or inline
+ * {@code data:image/...} URIs. Decoding never happens on the UI draw thread.
  */
 public class ImageStore {
 
     private static final int MAX_CACHE_BYTES = 24 * 1024 * 1024;
     private static final ThreadPoolExecutor DECODER = createDecoderPool();
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private static ThreadPoolExecutor createDecoderPool() {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 15L, TimeUnit.SECONDS,
@@ -44,11 +44,11 @@ public class ImageStore {
     }
 
     private final ZipArchive zip;
+    private final Handler main = new Handler(Looper.getMainLooper());
     private final LruCache<String, Bitmap> cache;
-    /** Widths held in memory for each image, so {@link #best} is a cheap lookup. */
     private final Map<String, TreeSet<Integer>> widths = new HashMap<>();
-    /** Jobs already queued, so a pinch never asks for the same decode twice. */
     private final Set<String> pending = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final ConcurrentHashMap<String, Boolean> monochromeInk = new ConcurrentHashMap<>();
     private int activeDecodes;
     private Runnable onClosedIdle;
     private boolean closed;
@@ -86,6 +86,37 @@ public class ImageStore {
         };
     }
 
+    /** Reads intrinsic image dimensions without decoding pixels (supports zip & data URIs). */
+    public static int[] readBounds(ZipArchive zip, String path) {
+        if (path == null || path.isEmpty()) return null;
+        try {
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inJustDecodeBounds = true;
+            try (InputStream in = openSource(zip, path)) {
+                if (in == null) return null;
+                BitmapFactory.decodeStream(in, null, opts);
+            }
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) return null;
+            return new int[]{opts.outWidth, opts.outHeight};
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static InputStream openSource(ZipArchive zip, String path) throws IOException {
+        if (path.startsWith("data:")) {
+            byte[] bytes = EpubParser.decodeDataUri(path);
+            return bytes == null ? null : new ByteArrayInputStream(bytes);
+        }
+        return zip == null ? null : zip.open(path);
+    }
+
+    /** True if the decoded image is a transparent-background dark monochrome glyph (gaiji/eq). */
+    public boolean isMonochromeInk(String path) {
+        Boolean v = path == null ? null : monochromeInk.get(path);
+        return v != null && v;
+    }
+
     /**
      * The sharpest bitmap already in memory that is at least {@code minWidth} wide, or the
      * widest one below it. Never touches the disk, so it is safe inside onDraw.
@@ -117,10 +148,11 @@ public class ImageStore {
         synchronized (this) {
             if (closed) return null;
         }
-        Bitmap best = best(path, width);
-        if (best != null && best.getWidth() >= width) return best;
+        int targetW = Math.max(1, width);
+        Bitmap best = best(path, targetW);
+        if (best != null && best.getWidth() >= targetW) return best;
 
-        final String key = key(path, width);
+        final String key = key(path, targetW);
         if (!pending.add(key)) return best;
         DECODER.execute(() -> {
             Runnable deferredClose = null;
@@ -130,8 +162,11 @@ public class ImageStore {
                     activeDecodes++;
                 }
                 try {
-                    Bitmap result = decode(path, width);
+                    Bitmap result = decode(path, targetW);
                     if (result != null) {
+                        if (!monochromeInk.containsKey(path)) {
+                            monochromeInk.put(path, detectMonochromeInk(result));
+                        }
                         boolean notify = false;
                         synchronized (ImageStore.this) {
                             if (!closed) {
@@ -140,12 +175,12 @@ public class ImageStore {
                                     known = new TreeSet<>();
                                     widths.put(path, known);
                                 }
-                                known.add(width);
+                                known.add(targetW);
                                 cache.put(key, result);
                                 notify = onReady != null;
                             }
                         }
-                        if (notify) MAIN.post(onReady);
+                        if (notify) main.post(onReady);
                     }
                 } finally {
                     synchronized (ImageStore.this) {
@@ -156,7 +191,7 @@ public class ImageStore {
                         }
                     }
                 }
-            } catch (RuntimeException ignored) {
+            } catch (Throwable ignored) {
             } finally {
                 pending.remove(key);
                 if (deferredClose != null) deferredClose.run();
@@ -165,25 +200,43 @@ public class ImageStore {
         return best;
     }
 
+    private static boolean detectMonochromeInk(Bitmap bmp) {
+        if (!bmp.hasAlpha() || bmp.getConfig() == Bitmap.Config.RGB_565) return false;
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        if (w <= 0 || h <= 0 || (w > 512 && h > 256)) return false;
+        int stepX = Math.max(1, w / 8);
+        int stepY = Math.max(1, h / 8);
+        boolean sawTransparent = false;
+        boolean sawInk = false;
+        for (int y = 0; y < h; y += stepY) {
+            for (int x = 0; x < w; x += stepX) {
+                int c = bmp.getPixel(x, y);
+                int a = Color.alpha(c);
+                if (a < 24) {
+                    sawTransparent = true;
+                    continue;
+                }
+                sawInk = true;
+                int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
+                int max = Math.max(r, Math.max(g, b));
+                int min = Math.min(r, Math.min(g, b));
+                if (max > 95 || (max - min) > 28) return false;
+            }
+        }
+        return sawTransparent && sawInk;
+    }
+
     public synchronized void trimMemory(int level) {
         if (closed) return;
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
-                || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            cache.evictAll();
-            widths.clear();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            cache.trimToSize(cache.maxSize() / 2);
-        }
+        Ui.trimCache(cache, level);
+        if (cache.size() == 0) widths.clear();
     }
 
     public void close() {
         close(null);
     }
 
-    /**
-     * Evicts cached bitmaps immediately and runs {@code afterDecodes} once no background
-     * decode is reading from the archive, avoiding mid-stream file descriptor races in Skia.
-     */
     public void close(Runnable afterDecodes) {
         boolean runNow = false;
         synchronized (this) {
@@ -192,6 +245,7 @@ public class ImageStore {
                 pending.clear();
                 cache.evictAll();
                 widths.clear();
+                monochromeInk.clear();
             }
             if (activeDecodes == 0) {
                 runNow = afterDecodes != null;
@@ -210,13 +264,13 @@ public class ImageStore {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
-            try (InputStream in = zip.open(path)) {
+            try (InputStream in = openSource(zip, path)) {
+                if (in == null) return null;
                 BitmapFactory.decodeStream(in, null, bounds);
             }
             if (bounds.outWidth <= 0) return null;
             int sample = 1;
             while (bounds.outWidth / (sample * 2) >= targetWidth) sample *= 2;
-            // Opaque JPEGs have no alpha channel: RGB_565 halves bitmap RAM with no box artifacts.
             boolean jpeg = "image/jpeg".equalsIgnoreCase(bounds.outMimeType)
                     || "image/jpg".equalsIgnoreCase(bounds.outMimeType);
             return decodeSampled(path, sample, targetWidth,
@@ -233,8 +287,8 @@ public class ImageStore {
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
             opts.inPreferredConfig = config;
-            try (InputStream in = zip.open(path)) {
-                decoded = BitmapFactory.decodeStream(in, null, opts);
+            try (InputStream in = openSource(zip, path)) {
+                if (in != null) decoded = BitmapFactory.decodeStream(in, null, opts);
             }
         } catch (OutOfMemoryError oom) {
             synchronized (this) {
@@ -244,8 +298,8 @@ public class ImageStore {
             BitmapFactory.Options fallback = new BitmapFactory.Options();
             fallback.inSampleSize = Math.max(2, sample * 2);
             fallback.inPreferredConfig = Bitmap.Config.RGB_565;
-            try (InputStream in = zip.open(path)) {
-                decoded = BitmapFactory.decodeStream(in, null, fallback);
+            try (InputStream in = openSource(zip, path)) {
+                if (in != null) decoded = BitmapFactory.decodeStream(in, null, fallback);
             } catch (OutOfMemoryError ignored) {
                 return null;
             }
@@ -260,7 +314,6 @@ public class ImageStore {
                 if (scaled != decoded) decoded.recycle();
                 decoded = scaled;
             } catch (OutOfMemoryError ignored) {
-                // Keep the already-decoded bitmap rather than crashing under low memory.
             }
         }
         return decoded;

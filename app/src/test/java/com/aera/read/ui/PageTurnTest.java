@@ -44,7 +44,7 @@ public class PageTurnTest {
         app = ApplicationProvider.getApplicationContext();
         TestSupport.clearLibrary(app);
         ReaderPrefs prefs = new ReaderPrefs(app);
-        prefs.theme = "paper";
+        prefs.theme = "light";
         prefs.viewMode = "pages";
         prefs.direction = "ltr";
         prefs.font = "system";

@@ -1,6 +1,5 @@
 package com.aera.read.ui;
 
-import android.content.ComponentCallbacks2;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -9,6 +8,7 @@ import android.graphics.Typeface;
 import android.util.LruCache;
 
 import com.aera.read.data.Book;
+import com.aera.read.util.Ui;
 
 import java.util.Locale;
 
@@ -33,18 +33,12 @@ public final class PlaceholderCovers {
     }
 
     public static void trimMemory(int level) {
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
-                || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            CACHE.evictAll();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            CACHE.trimToSize(CACHE.maxSize() / 2);
-        }
+        Ui.trimCache(CACHE, level);
     }
 
     private static Bitmap draw(Book book) {
         int width = 480;
         int height = 640;
-        // Opaque solid background: RGB_565 uses half the memory of ARGB_8888 (600 KB vs 1.2 MB).
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
         Canvas canvas = new Canvas(bitmap);
         int bg = COLORS[Math.floorMod(book.id().hashCode(), COLORS.length)];
@@ -80,15 +74,20 @@ public final class PlaceholderCovers {
 
     private static String initials(String title) {
         if (title == null || title.trim().isEmpty()) return "?";
-        String[] words = title.trim().split("\\s+");
-        StringBuilder sb = new StringBuilder();
-        for (String w : words) {
-            if (w.isEmpty()) continue;
-            char c = w.toUpperCase(Locale.ROOT).charAt(0);
-            if (Character.isLetterOrDigit(c)) sb.append(c);
-            if (sb.length() == 2) break;
+        String trimmed = title.trim();
+        StringBuilder sb = new StringBuilder(2);
+        boolean wordStart = true;
+        for (int i = 0; i < trimmed.length() && sb.length() < 2; i++) {
+            char c = trimmed.charAt(i);
+            if (c <= ' ') {
+                wordStart = true;
+            } else if (wordStart) {
+                wordStart = false;
+                char up = Character.toUpperCase(c);
+                if (Character.isLetterOrDigit(up)) sb.append(up);
+            }
         }
-        if (sb.length() == 0) sb.append(title.trim().toUpperCase(Locale.ROOT).charAt(0));
+        if (sb.length() == 0) sb.append(trimmed.toUpperCase(Locale.ROOT).charAt(0));
         return sb.toString();
     }
 }

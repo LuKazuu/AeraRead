@@ -44,24 +44,6 @@ public final class Library {
         return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    private static Book copyBook(Book src) {
-        Book b = new Book();
-        b.uri = src.uri;
-        b.title = src.title;
-        b.author = src.author;
-        b.type = src.type;
-        b.coverFile = src.coverFile;
-        b.size = src.size;
-        b.lastModified = src.lastModified;
-        b.addedAt = src.addedAt;
-        b.chapter = src.chapter;
-        b.offset = src.offset;
-        b.fraction = src.fraction;
-        b.layoutKey = src.layoutKey;
-        b.progress = src.progress;
-        return b;
-    }
-
     // ---------------------------------------------------------------- folders
 
     public static List<String> folders(Context c) {
@@ -84,8 +66,7 @@ public final class Library {
 
     public static void removeFolder(Context c, String treeUri) {
         List<String> all = folders(c);
-        all.remove(treeUri);
-        saveFolders(c, all);
+        if (all.remove(treeUri)) saveFolders(c, all);
     }
 
     private static void saveFolders(Context c, List<String> folders) {
@@ -108,38 +89,42 @@ public final class Library {
                 }
             } catch (Exception ignored) {
             }
-            Collections.sort(parsed, (a, b) -> Long.compare(b.addedAt, a.addedAt));
+            parsed.sort((a, b) -> Long.compare(b.addedAt, a.addedAt));
             cachedBooksRaw = raw;
             cachedBooks = Collections.unmodifiableList(parsed);
             return cachedBooks;
         }
     }
 
+    private static void persistBookList(Context c, List<Book> ordered) {
+        JSONArray arr = new JSONArray();
+        for (Book b : ordered) arr.put(b.toJson());
+        String raw = arr.toString();
+        synchronized (LOCK) {
+            cachedBooksRaw = raw;
+            cachedBooks = Collections.unmodifiableList(ordered);
+        }
+        sp(c).edit().putString(KEY_BOOKS, raw).apply();
+    }
+
     public static List<Book> books(Context c) {
         List<Book> snap = booksSnapshot(c);
         List<Book> out = new ArrayList<>(snap.size());
-        for (Book b : snap) out.add(copyBook(b));
+        for (Book b : snap) out.add(b.copy());
         return out;
     }
 
     public static void saveBooks(Context c, List<Book> books) {
         List<Book> sorted = new ArrayList<>(books.size());
-        for (Book b : books) sorted.add(copyBook(b));
-        Collections.sort(sorted, (a, b) -> Long.compare(b.addedAt, a.addedAt));
-        JSONArray arr = new JSONArray();
-        for (Book b : sorted) arr.put(b.toJson());
-        String raw = arr.toString();
-        synchronized (LOCK) {
-            cachedBooksRaw = raw;
-            cachedBooks = Collections.unmodifiableList(sorted);
-        }
-        sp(c).edit().putString(KEY_BOOKS, raw).apply();
+        for (Book b : books) sorted.add(b.copy());
+        sorted.sort((a, b) -> Long.compare(b.addedAt, a.addedAt));
+        persistBookList(c, sorted);
     }
 
     public static Book byId(Context c, String id) {
         if (id == null) return null;
         for (Book b : booksSnapshot(c)) {
-            if (b.id().equals(id)) return copyBook(b);
+            if (b.id().equals(id)) return b.copy();
         }
         return null;
     }
@@ -162,11 +147,11 @@ public final class Library {
                         && Float.compare(b.fraction, fraction) == 0
                         && Float.compare(b.progress, progress) == 0
                         && Objects.equals(b.layoutKey, nextKey)) {
-                    return; // unchanged: zero JSON serialization or disk write
+                    return;
                 }
                 updated = new ArrayList<>(snap.size());
                 for (int j = 0; j < snap.size(); j++) {
-                    Book copy = copyBook(snap.get(j));
+                    Book copy = snap.get(j).copy();
                     if (j == i) {
                         copy.chapter = chapter;
                         copy.offset = offset;
@@ -179,15 +164,7 @@ public final class Library {
                 break;
             }
         }
-        if (updated == null) return;
-        JSONArray arr = new JSONArray();
-        for (Book b : updated) arr.put(b.toJson());
-        String raw = arr.toString();
-        synchronized (LOCK) {
-            cachedBooksRaw = raw;
-            cachedBooks = Collections.unmodifiableList(updated);
-        }
-        sp(c).edit().putString(KEY_BOOKS, raw).apply();
+        if (updated != null) persistBookList(c, updated);
     }
 
     /** Removes the library entry and its cached thumbnail; the book file itself is untouched. */
@@ -211,11 +188,8 @@ public final class Library {
     public static void deleteQuietly(String path) {
         if (path == null || path.isEmpty()) return;
         try {
-            File f = new File(path);
-            if (f.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                f.delete();
-            }
+            //noinspection ResultOfMethodCallIgnored
+            new File(path).delete();
         } catch (Exception ignored) {
         }
     }
@@ -263,13 +237,7 @@ public final class Library {
 
     public static void removeBookmark(Context c, String id, Bookmark bm) {
         List<Bookmark> all = bookmarks(c, id);
-        Iterator<Bookmark> it = all.iterator();
-        while (it.hasNext()) {
-            Bookmark b = it.next();
-            if (b.created == bm.created && b.chapter == bm.chapter && b.offset == bm.offset) {
-                it.remove();
-            }
-        }
+        all.removeIf(b -> b.created == bm.created && b.chapter == bm.chapter && b.offset == bm.offset);
         saveBookmarks(c, id, all);
     }
 }

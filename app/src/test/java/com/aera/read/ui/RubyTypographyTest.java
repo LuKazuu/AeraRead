@@ -332,7 +332,7 @@ public class RubyTypographyTest {
         float gikunLineW = pGikun.page(0).segments.get(0).layout.getLineWidth(0);
         assertTrue("extreme reading never overflows column width 260: " + gikunLineW,
                 gikunLineW <= 260.5f);
-        Bitmap rendered = renderSinglePageForbiddingSaveLayer(pGikun, ReaderTheme.PAPER);
+        Bitmap rendered = renderSinglePageForbiddingSaveLayer(pGikun, ReaderTheme.LIGHT);
         rendered.recycle();
     }
 
@@ -432,7 +432,7 @@ public class RubyTypographyTest {
                     guard.scale(2.5f, 2.5f, 270f, 300f);
                     a.getWindow().getDecorView().draw(guard);
                     guard.restore();
-                    assertTrue(countNonBgInRows(zoomed, ReaderTheme.PAPER.bg, 0, 959) > 500);
+                    assertTrue(countNonBgInRows(zoomed, ReaderTheme.LIGHT.bg, 0, 959) > 500);
                 } finally {
                     zoomed.recycle();
                 }

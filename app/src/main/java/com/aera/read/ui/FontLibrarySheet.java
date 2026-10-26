@@ -6,10 +6,6 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
-
 import com.aera.read.R;
 import com.aera.read.util.FontCatalog;
 import com.aera.read.util.FontStore;
@@ -22,15 +18,10 @@ import com.google.android.material.button.MaterialButton;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Download and remove fonts. Only the system face ships with the app; everything else is
- * fetched once and stored privately. Choosing a face happens on the appearance chips, so
- * this sheet never changes what the reader is set to.
- */
+/** Download and remove fonts. Only the system face ships with the app. */
 public class FontLibrarySheet {
 
     public interface Callback {
-        /** A font was added or removed; the reader's chip row has to catch up. */
         void onFontsChanged();
     }
 
@@ -47,22 +38,13 @@ public class FontLibrarySheet {
 
     public void show() {
         FontStore.cleanPartials(ctx);
-        dialog = new BottomSheetDialog(ctx);
-        dialog.setContentView(R.layout.sheet_fonts);
+        dialog = Ui.createSheet(ctx, R.layout.sheet_fonts, 16);
         View root = dialog.findViewById(R.id.sheet_root);
         if (root == null) return;
-
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(),
-                    Ui.dp(ctx, 16) + bars.bottom);
-            return insets;
-        });
 
         list = root.findViewById(R.id.font_list);
         dialog.show();
 
-        // the list is long, so the sheet gets a fixed height and scrolls inside it
         View sheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
         if (sheet != null) {
             android.util.DisplayMetrics metrics = ctx.getResources().getDisplayMetrics();
@@ -137,7 +119,6 @@ public class FontLibrarySheet {
         row.row.setAlpha(busy ? 0.6f : 1f);
     }
 
-    /** Tapping a row downloads a missing font. Choosing one happens in Appearance. */
     private void download(Row row) {
         if (FontStore.isDownloading(row.entry.id)) return;
         if (FontStore.isInstalled(ctx, row.entry.id)) return;

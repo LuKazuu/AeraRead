@@ -47,7 +47,7 @@ public class PdfSessionTest {
         source = new TestPdfSource(24);
         PdfSession.sourceFactory = (context, b) -> source;
         session = PdfSession.open(app, book);
-        session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+        session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
     }
 
     @After
@@ -63,7 +63,7 @@ public class PdfSessionTest {
         assertTrue(session.pageLabel(2).contains("3"));
         assertFalse("PDFs have no text typography", session.supportsTypography());
         assertFalse("PDFs have no table of contents", session.supportsContents());
-        assertFalse("PDFs are always paged", session.supportsViewMode());
+        assertTrue("PDFs support both paged and scroll view modes", session.supportsViewMode());
     }
 
     @Test
@@ -98,8 +98,13 @@ public class PdfSessionTest {
         assertEquals(11, stored.offset);
         assertEquals(0f, stored.fraction, 0.001f);
         assertTrue(stored.progress > 0.4f && stored.progress < 0.55f);
+
+        session.persistPosition(11, 0.45f, 1782);
+        Book scrolled = Library.byId(app, book.id());
+        assertNotNull(scrolled);
+        assertEquals(0.45f, scrolled.fraction, 0.001f);
         assertEquals(11, session.initialPage());
-        assertEquals(0f, session.initialFraction(), 0.001f);
+        assertEquals(0.45f, session.initialFraction(), 0.001f);
     }
 
     @Test

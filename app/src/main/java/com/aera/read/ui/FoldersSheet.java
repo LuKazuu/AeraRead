@@ -6,15 +6,13 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.aera.read.R;
 import com.aera.read.data.Library;
+import com.aera.read.util.Ui;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,17 +34,9 @@ public class FoldersSheet {
     }
 
     public void show() {
-        dialog = new BottomSheetDialog(activity);
-        dialog.setContentView(R.layout.sheet_folders);
+        dialog = Ui.createSheet(activity, R.layout.sheet_folders, 0);
         View root = dialog.findViewById(R.id.sheet_root);
         if (root == null) return;
-
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(),
-                    bars.bottom);
-            return insets;
-        });
 
         RecyclerView list = root.findViewById(R.id.folder_list);
         View empty = root.findViewById(R.id.folder_empty);

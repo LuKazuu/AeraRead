@@ -98,7 +98,7 @@ public class ZoomSharpnessTest {
         RecordingSource source = new RecordingSource(12);
         PdfSession.sourceFactory = (context, b) -> source;
         session = PdfSession.open(app, book);
-        session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+        session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
 
         FrameLayout parent = new FrameLayout(app);
         View item = session.createItemView(parent, false);
@@ -125,7 +125,7 @@ public class ZoomSharpnessTest {
         RecordingSource source = new RecordingSource(12);
         PdfSession.sourceFactory = (context, b) -> source;
         session = PdfSession.open(app, book);
-        session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+        session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
 
         FrameLayout parent = new FrameLayout(app);
         View item = session.createItemView(parent, true);
@@ -147,7 +147,7 @@ public class ZoomSharpnessTest {
         Book book = TestSupport.installFakePdf(app, "Zoom (PDF)");
         PdfSession.sourceFactory = (context, b) -> new RecordingSource(12);
         session = PdfSession.open(app, book);
-        session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+        session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
 
         FrameLayout parent = new FrameLayout(app);
         View item = session.createItemView(parent, false);

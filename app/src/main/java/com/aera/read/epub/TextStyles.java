@@ -8,13 +8,25 @@ import com.aera.read.data.ReaderPrefs;
 import com.aera.read.util.Fonts;
 import com.aera.read.util.Ui;
 
-/** Paints and spacing metrics derived from user settings. Shared by all pages of a layout. */
+/**
+ * Paints, pre-resolved typefaces, and spacing metrics derived from user settings.
+ * Shared across all pages of a layout so paragraphs never allocate duplicate native Paints.
+ */
 public class TextStyles {
 
     public final TextPaint body = new TextPaint();
     public final TextPaint h1 = new TextPaint();
     public final TextPaint h2 = new TextPaint();
     public final TextPaint quote = new TextPaint();
+
+    public final Typeface tfRegular;
+    public final Typeface tfBold;
+    public final Typeface tfItalic;
+    public final Typeface tfBoldItalic;
+    public final Typeface tfMonoRegular;
+    public final Typeface tfMonoBold;
+    public final Typeface tfMonoItalic;
+    public final Typeface tfMonoBoldItalic;
 
     public final float sizePx;
     public final int linePct;
@@ -33,16 +45,34 @@ public class TextStyles {
         quoteIndent = Ui.dp(c, 18);
         listIndent = Ui.dp(c, 16);
 
-        Typeface regular = Fonts.get(c, prefs.font, false, false);
-        Typeface bold = Fonts.get(c, prefs.font, true, false);
-        Typeface italic = Fonts.get(c, prefs.font, false, true);
+        tfRegular = Fonts.get(c, prefs.font, false, false);
+        tfBold = Fonts.get(c, prefs.font, true, false);
+        tfItalic = Fonts.get(c, prefs.font, false, true);
+        tfBoldItalic = Fonts.get(c, prefs.font, true, true);
+        tfMonoRegular = Fonts.mono(false, false);
+        tfMonoBold = Fonts.mono(true, false);
+        tfMonoItalic = Fonts.mono(false, true);
+        tfMonoBoldItalic = Fonts.mono(true, true);
 
-        setup(body, regular, sizePx);
-        setup(h1, bold, sizePx * 1.5f);
-        setup(h2, bold, sizePx * 1.2f);
-        setup(quote, italic, sizePx * 0.97f);
+        setup(body, tfRegular, sizePx);
+        setup(h1, tfBold, sizePx * 1.5f);
+        setup(h2, tfBold, sizePx * 1.2f);
+        setup(quote, tfItalic, sizePx * 0.97f);
 
         lineExtra = lineExtraFor(body);
+    }
+
+    public Typeface typefaceFor(boolean mono, boolean bold, boolean italic) {
+        if (mono) {
+            if (bold && italic) return tfMonoBoldItalic;
+            if (bold) return tfMonoBold;
+            if (italic) return tfMonoItalic;
+            return tfMonoRegular;
+        }
+        if (bold && italic) return tfBoldItalic;
+        if (bold) return tfBold;
+        if (italic) return tfItalic;
+        return tfRegular;
     }
 
     /** Target line box height in pixels for a paint at the current line-spacing setting. */

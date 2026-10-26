@@ -1,38 +1,63 @@
 package com.aera.read.io;
 
+import java.io.Closeable;
 import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 
-/** {@link SeekableSource} over a regular file. */
+/**
+ * Lock-free positional {@link SeekableSource} over a {@link File} via {@link FileChannel}.
+ * Positional {@code FileChannel.read(ByteBuffer, long)} maps to {@code pread64} with no seek
+ * syscall and no shared file-offset lock contention across reader and image-decode threads.
+ */
 public final class FileSource implements SeekableSource {
 
-    private final RandomAccessFile file;
-    private boolean closed;
+    private final FileChannel channel;
+    private volatile boolean closed;
 
     public FileSource(File file) throws IOException {
-        this.file = new RandomAccessFile(file, "r");
+        this.channel = FileChannel.open(file.toPath(), StandardOpenOption.READ);
     }
 
     @Override
-    public synchronized long size() throws IOException {
+    public long size() throws IOException {
         if (closed) throw new EOFException("Source closed");
-        return file.length();
+        return channel.size();
     }
 
     @Override
-    public synchronized int readAt(long position, byte[] buffer, int offset, int length)
-            throws IOException {
+    public int readAt(long position, byte[] buffer, int offset, int length) throws IOException {
         if (closed) throw new EOFException("Source closed");
-        file.seek(position);
-        return file.read(buffer, offset, length);
+        return readChannel(channel, position, buffer, offset, length);
     }
 
     @Override
     public synchronized void close() throws IOException {
         if (closed) return;
         closed = true;
-        file.close();
+        channel.close();
+    }
+
+    static int readChannel(FileChannel channel, long position, byte[] buffer, int offset,
+                           int length) throws IOException {
+        ByteBuffer bb = ByteBuffer.wrap(buffer, offset, length);
+        int total = 0;
+        while (bb.hasRemaining()) {
+            int n = channel.read(bb, position + total);
+            if (n <= 0) break;
+            total += n;
+        }
+        return total == 0 ? -1 : total;
+    }
+
+    static void closeQuietly(Closeable c) {
+        if (c == null) return;
+        try {
+            c.close();
+        } catch (IOException ignored) {
+        }
     }
 }

@@ -27,13 +27,20 @@ public interface ReadingSession extends AutoCloseable {
     /** EPUB only: table of contents. */
     boolean supportsContents();
 
-    /** EPUB only: scroll vs paged reading. PDFs are always paged. */
-    boolean supportsViewMode();
+    /** Scroll vs paged reading and LTR/RTL page turn direction. */
+    default boolean supportsViewMode() {
+        return true;
+    }
 
     int initialPage();
 
     /** 0..1 offset inside the first visible page (scroll mode resume). */
     float initialFraction();
+
+    /** Exact scroll-item height in pixels for restoring sub-page scroll offsets. */
+    default int scrollPageHeight(int page, int frameWidth, int frameHeight) {
+        return frameHeight;
+    }
 
     void layout(ReaderPrefs prefs, ReaderTheme theme, int frameWidth, int frameHeight)
             throws Exception;
@@ -44,29 +51,27 @@ public interface ReadingSession extends AutoCloseable {
 
     void setTheme(ReaderTheme theme);
 
+    /** PDF only: whether themes transform the full page or only the surrounding background. */
+    default void setPdfFullTheme(boolean fullPage) {
+    }
+
     boolean needsRelayout(ReaderPrefs prefs);
 
     /** Re-paginates for new typography and returns the page holding the old position. */
     int relayout(ReaderPrefs prefs, int frameWidth, int frameHeight, int currentPage,
                  float currentFraction);
 
-    /**
-     * Holds re-layouts to one spot while the reader previews settings, so a run of changes
-     * cannot walk the position backwards page by page. Formats that do not reflow ignore it.
-     */
     default void pinAnchor(int page, float fraction, int frameHeight) {
     }
 
     default void clearAnchor() {
     }
 
-    /** The reader moved: any spot held for re-layouts must be forgotten. */
     default void noteNavigation() {
     }
 
     void persistPosition(int page, float fraction, int frameHeight);
 
-    // bookmarks
     boolean isBookmarked(int page);
 
     void toggleBookmark(int page);
@@ -79,12 +84,10 @@ public interface ReadingSession extends AutoCloseable {
 
     void deleteBookmark(Bookmark bookmark);
 
-    // contents (EPUB only, empty otherwise)
     List<EpubBook.TocEntry> contents();
 
     int pageOfContents(int index);
 
-    /** Releases transient caches under system memory pressure without closing the book. */
     default void trimMemory(int level) {
     }
 

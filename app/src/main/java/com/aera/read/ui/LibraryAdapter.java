@@ -1,6 +1,5 @@
 package com.aera.read.ui;
 
-import android.content.ComponentCallbacks2;
 import android.graphics.Bitmap;
 import android.util.LruCache;
 import android.view.LayoutInflater;
@@ -13,10 +12,11 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.material.card.MaterialCardView;
-import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.aera.read.R;
 import com.aera.read.data.Book;
+import com.aera.read.util.Ui;
+import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,12 +55,7 @@ public class LibraryAdapter extends RecyclerView.Adapter<LibraryAdapter.Holder> 
     }
 
     public void trimMemory(int level) {
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
-                || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            covers.evictAll();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            covers.trimToSize(covers.maxSize() / 2);
-        }
+        Ui.trimCache(covers, level);
     }
 
     @NonNull
@@ -75,8 +70,6 @@ public class LibraryAdapter extends RecyclerView.Adapter<LibraryAdapter.Holder> 
     public void onBindViewHolder(@NonNull Holder holder, int position) {
         Book book = items.get(position);
         holder.title.setText(book.title);
-        // the line is never empty: a missing author is said, not hidden, so the progress
-        // bar keeps its place on every card
         boolean hasAuthor = book.author != null && !book.author.trim().isEmpty();
         holder.author.setText(hasAuthor ? book.author
                 : holder.author.getContext().getString(R.string.no_author));

@@ -5,7 +5,7 @@ import com.aera.read.io.ZipArchive;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Parsed EPUB: metadata, chapters with flattened text blocks, table of contents. */
+/** Parsed EPUB: metadata, chapters with styled blocks, inline spans/images, and contents. */
 public class EpubBook {
 
     public String title = "";
@@ -37,21 +37,30 @@ public class EpubBook {
         public String text = "";
         public int style = STYLE_BODY;
         public List<Ruby> rubies;
+        public List<InlineSpan> spans;
+        public List<InlineImage> inlineImages;
         public String imagePath = "";
         public int imgW;
         public int imgH;
         public int charStart;
 
         public static Block text(String text, int style) {
-            return text(text, style, null);
+            return richText(text, style, null, null, null);
         }
 
         public static Block text(String text, int style, List<Ruby> rubies) {
+            return richText(text, style, rubies, null, null);
+        }
+
+        public static Block richText(String text, int style, List<Ruby> rubies,
+                                     List<InlineSpan> spans, List<InlineImage> inlineImages) {
             Block b = new Block();
             b.type = TEXT;
             b.text = text;
             b.style = style;
             if (rubies != null && !rubies.isEmpty()) b.rubies = rubies;
+            if (spans != null && !spans.isEmpty()) b.spans = spans;
+            if (inlineImages != null && !inlineImages.isEmpty()) b.inlineImages = inlineImages;
             return b;
         }
 
@@ -62,6 +71,61 @@ public class EpubBook {
             b.imgW = w;
             b.imgH = h;
             return b;
+        }
+    }
+
+    /**
+     * Inline formatting run over {@code [start, end)} of a {@link Block#text}.
+     * Bits 0..7 set inline styles; bits 8..9 explicitly clear inherited bold/italic via CSS.
+     */
+    public static final class InlineSpan {
+        public static final int BOLD = 1;
+        public static final int ITALIC = 1 << 1;
+        public static final int UNDERLINE = 1 << 2;
+        public static final int STRIKE = 1 << 3;
+        public static final int CODE = 1 << 4;
+        public static final int SUP = 1 << 5;
+        public static final int SUB = 1 << 6;
+        public static final int SMALL = 1 << 7;
+        public static final int CLEAR_BOLD = 1 << 8;
+        public static final int CLEAR_ITALIC = 1 << 9;
+
+        public final int start;
+        public final int end;
+        public final int mask;
+
+        public InlineSpan(int start, int end, int mask) {
+            this.start = start;
+            this.end = end;
+            this.mask = mask;
+        }
+    }
+
+    /**
+     * Inline image / gaiji anchored at {@code [pos, pos + 1)} (the {@code \uFFFC} placeholder)
+     * inside {@link Block#text}. Explicit CSS/HTML dimensions ({@code emW}/{@code emH} or
+     * {@code pxW}/{@code pxH}) are optional; {@code 0} means derive from intrinsic dimensions.
+     */
+    public static final class InlineImage {
+        public final int pos;
+        public final String path;
+        public final int imgW;
+        public final int imgH;
+        public final float emW;
+        public final float emH;
+        public final float pxW;
+        public final float pxH;
+
+        public InlineImage(int pos, String path, int imgW, int imgH,
+                           float emW, float emH, float pxW, float pxH) {
+            this.pos = pos;
+            this.path = path;
+            this.imgW = imgW;
+            this.imgH = imgH;
+            this.emW = emW;
+            this.emH = emH;
+            this.pxW = pxW;
+            this.pxH = pxH;
         }
     }
 

@@ -50,7 +50,7 @@ public class PageZoomTest {
         ReaderPrefs prefs = new ReaderPrefs(app);
         PagedBook paged = EpubPaginator.paginate(book(), TextStyles.create(app, prefs), 700, 1200);
         PageView view = new PageView(app, scrollMode);
-        view.setData(paged, paged.page(4), com.aera.read.data.ReaderTheme.PAPER, null);
+        view.setData(paged, paged.page(4), com.aera.read.data.ReaderTheme.LIGHT, null);
         view.measure(android.view.View.MeasureSpec.makeMeasureSpec(822,
                         android.view.View.MeasureSpec.EXACTLY),
                 android.view.View.MeasureSpec.makeMeasureSpec(1694,
@@ -184,7 +184,7 @@ public class PageZoomTest {
 
         PagedBook paged = EpubPaginator.paginate(book(), TextStyles.create(app,
                 new ReaderPrefs(app)), 700, 1200);
-        view.setData(paged, paged.page(5), com.aera.read.data.ReaderTheme.PAPER, null);
+        view.setData(paged, paged.page(5), com.aera.read.data.ReaderTheme.LIGHT, null);
         assertFalse("turning the page resets the zoom", view.isZoomed());
     }
 

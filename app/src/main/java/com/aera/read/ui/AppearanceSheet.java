@@ -3,21 +3,13 @@ package com.aera.read.ui;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
-
-import com.google.android.material.bottomsheet.BottomSheetDialog;
-import com.google.android.material.button.MaterialButtonToggleGroup;
-import com.google.android.material.chip.Chip;
-import com.google.android.material.chip.ChipGroup;
-import com.google.android.material.materialswitch.MaterialSwitch;
-import com.google.android.material.slider.Slider;
 import com.aera.read.R;
 import com.aera.read.data.ReaderPrefs;
 import com.aera.read.data.ReaderTheme;
@@ -25,21 +17,25 @@ import com.aera.read.util.FontCatalog;
 import com.aera.read.util.FontStore;
 import com.aera.read.util.Fonts;
 import com.aera.read.util.Ui;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.button.MaterialButtonToggleGroup;
+import com.google.android.material.chip.Chip;
+import com.google.android.material.chip.ChipGroup;
+import com.google.android.material.materialswitch.MaterialSwitch;
+import com.google.android.material.slider.Slider;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Appearance controls. Sections the current format cannot use (typography and layout for
- * PDFs) are left out entirely instead of being shown disabled.
+ * Appearance controls. Adapts cleanly between EPUB (typography, line spacing, scroll/paged
+ * layout) and PDF (full-page vs background-only theme scope).
  */
 public class AppearanceSheet {
 
     public interface Callback {
-        /** True when text metrics changed and the book must be re-paginated. */
         void onAppearanceChanged(boolean needsRelayout);
 
-        /** Typography changed while a slider is still under the finger. */
         void onAppearancePreview();
     }
 
@@ -66,30 +62,24 @@ public class AppearanceSheet {
     }
 
     public void show() {
-        dialog = new BottomSheetDialog(ctx);
-        dialog.setContentView(R.layout.sheet_appearance);
+        dialog = Ui.createSheet(ctx, R.layout.sheet_appearance, 20);
         View root = dialog.findViewById(R.id.sheet_root);
         if (root == null) return;
 
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(),
-                    Ui.dp(ctx, 20) + bars.bottom);
-            return insets;
-        });
-
         buildSwatches(root);
 
+        View pdfThemeSection = root.findViewById(R.id.pdf_theme_section);
         View typography = root.findViewById(R.id.typography_section);
         View layoutSection = root.findViewById(R.id.layout_section);
-        View note = root.findViewById(R.id.typography_note);
+
+        pdfThemeSection.setVisibility(supportsTypography ? View.GONE : View.VISIBLE);
         typography.setVisibility(supportsTypography ? View.VISIBLE : View.GONE);
         layoutSection.setVisibility(supportsViewMode ? View.VISIBLE : View.GONE);
-        note.setVisibility(supportsTypography ? View.GONE : View.VISIBLE);
 
         sizeValue = root.findViewById(R.id.size_value);
         lineValue = root.findViewById(R.id.line_value);
 
+        if (!supportsTypography) buildPdfThemeScope(root);
         if (supportsTypography) buildTypography(root);
         if (supportsViewMode) buildLayout(root);
 
@@ -98,6 +88,33 @@ public class AppearanceSheet {
         keepOn.setOnCheckedChangeListener((buttonView, isChecked) -> applyKeepScreenOn(isChecked));
 
         dialog.show();
+    }
+
+    private void buildPdfThemeScope(View root) {
+        MaterialButtonToggleGroup toggle = root.findViewById(R.id.pdf_theme_toggle);
+        if (toggle != null) {
+            toggle.check(prefs.pdfFullTheme ? R.id.btn_pdf_full : R.id.btn_pdf_bg);
+            toggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+                if (!isChecked) return;
+                applyPdfFullTheme(checkedId == R.id.btn_pdf_full);
+            });
+        }
+
+        MaterialButtonToggleGroup trimToggle = root.findViewById(R.id.pdf_trim_toggle);
+        if (trimToggle != null) {
+            String activeTrim = ReaderPrefs.normalizeTrim(prefs.pdfTrim);
+            int checkedTrimId = ReaderPrefs.TRIM_OFF.equals(activeTrim)
+                    ? R.id.btn_trim_off
+                    : (ReaderPrefs.TRIM_MAX.equals(activeTrim)
+                    ? R.id.btn_trim_max : R.id.btn_trim_normal);
+            trimToggle.check(checkedTrimId);
+            trimToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+                if (!isChecked) return;
+                if (checkedId == R.id.btn_trim_off) applyPdfTrim(ReaderPrefs.TRIM_OFF);
+                else if (checkedId == R.id.btn_trim_max) applyPdfTrim(ReaderPrefs.TRIM_MAX);
+                else applyPdfTrim(ReaderPrefs.TRIM_NORMAL);
+            });
+        }
     }
 
     private void buildTypography(View root) {
@@ -171,7 +188,6 @@ public class AppearanceSheet {
 
     // ------------------------------------------------------------------ actions
 
-    /** Opens the download list; it reports back here so the chips stay in step. */
     private void openFontLibrary(View root) {
         new FontLibrarySheet(ctx, () -> {
             if (!Fonts.isAvailable(ctx, prefs.font)) {
@@ -190,7 +206,6 @@ public class AppearanceSheet {
         callback.onAppearanceChanged(true);
     }
 
-    /** Mid-drag: store and re-render now, without waiting for the finger to lift. */
     void previewSize(int sizeSp) {
         int clamped = Math.max(14, Math.min(30, sizeSp));
         if (prefs.sizeSp == clamped) return;
@@ -236,6 +251,21 @@ public class AppearanceSheet {
         callback.onAppearanceChanged(false);
     }
 
+    void applyPdfFullTheme(boolean fullPage) {
+        if (prefs.pdfFullTheme == fullPage) return;
+        prefs.pdfFullTheme = fullPage;
+        prefs.save();
+        callback.onAppearanceChanged(false);
+    }
+
+    void applyPdfTrim(String mode) {
+        String normalized = ReaderPrefs.normalizeTrim(mode);
+        if (normalized.equals(ReaderPrefs.normalizeTrim(prefs.pdfTrim))) return;
+        prefs.pdfTrim = normalized;
+        prefs.save();
+        callback.onAppearanceChanged(true);
+    }
+
     void applyViewMode(String mode) {
         if (prefs.viewMode.equals(mode)) return;
         prefs.viewMode = mode;
@@ -267,11 +297,12 @@ public class AppearanceSheet {
         row.removeAllViews();
         swatches.clear();
         int labelColor = Ui.colorAttr(ctx, com.google.android.material.R.attr.colorOnSurfaceVariant);
+        String activeKey = ReaderTheme.from(prefs.theme).key;
 
         for (ReaderTheme theme : ReaderTheme.values()) {
             LinearLayout column = new LinearLayout(ctx);
             column.setOrientation(LinearLayout.VERTICAL);
-            column.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            column.setGravity(Gravity.CENTER_HORIZONTAL);
             column.setLayoutParams(new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             column.setClickable(true);
@@ -280,13 +311,13 @@ public class AppearanceSheet {
             ThemeSwatch swatch = new ThemeSwatch(ctx);
             swatch.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(ctx, 44), Ui.dp(ctx, 44)));
             swatch.setTheme(theme);
-            swatch.setSelectedState(theme.key.equals(prefs.theme));
+            swatch.setSelectedState(theme.key.equals(activeKey));
 
             TextView label = new TextView(ctx);
             label.setText(theme.label);
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             label.setTextColor(labelColor);
-            label.setGravity(android.view.Gravity.CENTER);
+            label.setGravity(Gravity.CENTER);
             label.setPadding(0, Ui.dp(ctx, 7), 0, Ui.dp(ctx, 4));
 
             column.addView(swatch);
@@ -299,12 +330,12 @@ public class AppearanceSheet {
 
     private void refreshSwatches() {
         ReaderTheme[] all = ReaderTheme.values();
+        String activeKey = ReaderTheme.from(prefs.theme).key;
         for (int i = 0; i < swatches.size(); i++) {
-            swatches.get(i).setSelectedState(all[i].key.equals(prefs.theme));
+            swatches.get(i).setSelectedState(all[i].key.equals(activeKey));
         }
     }
 
-    /** Only faces that are on the device get a chip: the system one plus downloads. */
     private void buildFontChips(View root) {
         fontChips = root.findViewById(R.id.font_chips);
         if (fontChips == null) return;
@@ -335,21 +366,16 @@ public class AppearanceSheet {
         scrollToSelectedFont();
     }
 
-    /**
-     * The row scrolls sideways. Only move it when the chosen chip is actually out of sight,
-     * so opening the sheet never leaves the first face half cut off.
-     */
     private void scrollToSelectedFont() {
-        View scroll = ((View) fontChips.getParent());
-        if (!(scroll instanceof android.widget.HorizontalScrollView)) return;
+        View scroll = (View) fontChips.getParent();
+        if (!(scroll instanceof HorizontalScrollView)) return;
         int index = 0;
         for (int i = 0; i < fontChips.getChildCount(); i++) {
             if (prefs.font.equals(fontChips.getChildAt(i).getTag())) index = i;
         }
         int target = index;
         scroll.post(() -> {
-            android.widget.HorizontalScrollView view =
-                    (android.widget.HorizontalScrollView) scroll;
+            HorizontalScrollView view = (HorizontalScrollView) scroll;
             View chip = fontChips.getChildAt(target);
             if (chip == null || view.getWidth() == 0) return;
             int left = chip.getLeft();
@@ -384,5 +410,4 @@ public class AppearanceSheet {
     private void updateLineLabel(int percent) {
         if (lineValue != null) lineValue.setText(ctx.getString(R.string.percent, percent));
     }
-
 }

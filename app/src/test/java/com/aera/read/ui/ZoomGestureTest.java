@@ -72,7 +72,7 @@ public class ZoomGestureTest {
                     700, 1200);
         }
         PageView view = new PageView(app, scrollMode);
-        view.setData(paged, paged.page(4), ReaderTheme.PAPER, null);
+        view.setData(paged, paged.page(4), ReaderTheme.LIGHT, null);
         return view;
     }
 

@@ -9,36 +9,29 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.material.bottomsheet.BottomSheetDialog;
-import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.aera.read.R;
 import com.aera.read.data.Bookmark;
 import com.aera.read.epub.EpubBook;
 import com.aera.read.reader.ReadingSession;
 import com.aera.read.util.Ui;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.button.MaterialButtonToggleGroup;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Contents and bookmarks of the open book. Both live in the same sheet behind one
- * segmented switch so they look exactly like the rest of the app.
- */
+/** Contents and bookmarks of the open book behind one segmented switch. */
 public class NavSheet {
 
     public interface JumpListener {
         void onJump(int page);
     }
 
-    /** One row of the contents list: a heading and the page it really opens. */
     static final class Entry {
         final String title;
         final int page;
@@ -62,10 +55,6 @@ public class NavSheet {
     private MaterialButtonToggleGroup tabs;
     private boolean hasToc;
 
-    /**
-     * @param onBookmarksChanged run whenever a bookmark is deleted here, so the reader's
-     *                           toolbar can never keep showing a stale marker
-     */
     public NavSheet(Context ctx, ReadingSession session, int currentPage, JumpListener listener,
                     Runnable onBookmarksChanged) {
         this(ctx, session, currentPage, listener, onBookmarksChanged, 0);
@@ -81,23 +70,14 @@ public class NavSheet {
         this.initialTab = initialTab;
     }
 
-    /** 0 = contents (bookmarks when the book has none), 1 = bookmarks. */
     public NavSheet openOn(int tab) {
         return new NavSheet(ctx, session, currentPage, listener, onBookmarksChanged, tab);
     }
 
     public void show() {
-        dialog = new BottomSheetDialog(ctx);
-        dialog.setContentView(R.layout.sheet_nav);
+        dialog = Ui.createSheet(ctx, R.layout.sheet_nav, 0);
         View root = dialog.findViewById(R.id.sheet_root);
         if (root == null) return;
-
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(),
-                    bars.bottom);
-            return insets;
-        });
 
         TextView title = root.findViewById(R.id.nav_title);
         tabs = root.findViewById(R.id.nav_tabs);
@@ -126,10 +106,6 @@ public class NavSheet {
         dialog.show();
     }
 
-    /**
-     * Keeps one row per page. Sub-entries that resolve to a page already listed cannot
-     * take the reader anywhere new, so they are dropped instead of shown as dead links.
-     */
     static List<Entry> buildEntries(List<String> titles, List<Integer> pages) {
         List<Entry> entries = new ArrayList<>();
         Set<Integer> seen = new HashSet<>();
@@ -143,13 +119,12 @@ public class NavSheet {
         return entries;
     }
 
-    /** Keeps the list inside the sheet rather than squeezing the segmented switch. */
     private void layoutList() {
         View frame = (View) list.getParent();
         View root = dialog.findViewById(R.id.sheet_root);
         if (frame == null || root == null) return;
         int max = Math.round(ctx.getResources().getDisplayMetrics().heightPixels * 0.52f);
-        android.view.ViewGroup.LayoutParams params = frame.getLayoutParams();
+        ViewGroup.LayoutParams params = frame.getLayoutParams();
         if (params == null) return;
         params.height = max;
         frame.setLayoutParams(params);
@@ -173,7 +148,6 @@ public class NavSheet {
         list.setAdapter(new TocAdapter(entries, selected));
         layoutList();
         if (selected > 0) {
-            // open the list at the chapter being read, not at the cover
             ((LinearLayoutManager) list.getLayoutManager())
                     .scrollToPositionWithOffset(Math.max(0, selected - 1), 0);
         }
@@ -200,8 +174,6 @@ public class NavSheet {
     private void dismiss() {
         if (dialog != null) dialog.dismiss();
     }
-
-    // ------------------------------------------------------------------ adapters
 
     class TocAdapter extends RecyclerView.Adapter<TocAdapter.Holder> {
         final List<Entry> items;
@@ -271,7 +243,6 @@ public class NavSheet {
         public void onBindViewHolder(@NonNull Holder holder, int position) {
             Bookmark bookmark = items.get(position);
             int page = session.pageOfBookmark(bookmark);
-            // derived here so a renamed chapter or a reflow can never leave stale text
             holder.title.setText(session.bookmarkTitle(page));
             if (bookmark.chapter < 0) {
                 holder.sub.setVisibility(View.GONE);

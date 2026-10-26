@@ -4,6 +4,21 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">10dp</item>
     </style>
+    <style name="Widget.Aera.OutlinedButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:singleLine">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+    <style name="Widget.Aera.TonalButton" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:singleLine">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+    <style name="Widget.Aera.TextButton" parent="Widget.Material3.Button.TextButton">
+        <item name="android:singleLine">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+    </style>
     <style name="TextAppearance.Aera.SheetTitle" parent="TextAppearance.Material3.TitleLarge">
         <item name="android:textColor">?attr/colorOnSurface</item>
     </style>

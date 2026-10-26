@@ -1,6 +1,5 @@
 package com.aera.read.reader;
 
-import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Handler;
@@ -30,10 +29,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 
-/** PDF reading: pages streamed from the document, zoom, bookmarks and resume. */
+/** PDF reading: sharp margin-trimmed pages, full-page or background theming, zoom, bookmarks. */
 public class PdfSession implements ReadingSession {
 
-    /** Overridable for tests that cannot run the native PDF renderer. */
+    /** Overridable for tests that supply custom PDF sources. */
     public static PdfPageSource.Factory sourceFactory = PdfRendererSource::open;
 
     private static final int MAX_RENDER_WIDTH = 2400;
@@ -42,7 +41,9 @@ public class PdfSession implements ReadingSession {
     private final Context ctx;
     private final Book book;
     private PdfPageSource source;
-    private ReaderTheme theme = ReaderTheme.PAPER;
+    private ReaderTheme theme = ReaderTheme.LIGHT;
+    private boolean fullPageTheme = true;
+    private volatile String trimMode = ReaderPrefs.TRIM_NORMAL;
     private int pageCount;
 
     private final LruCache<String, Bitmap> cache;
@@ -53,10 +54,13 @@ public class PdfSession implements ReadingSession {
         return t;
     });
     private final Handler main = new Handler(Looper.getMainLooper());
-    private int renderWidth = 1000;
+    private int renderWidth = 1080;
+    private int frameW = 1080;
+    private final Object ratioLock = new Object();
+    private float[] pageRatios;
+    private float defaultPageRatio = ZoomImageView.DEFAULT_PAGE_RATIO;
     private volatile int activePage;
     private volatile boolean closed;
-    private final int margin;
 
     private static final class Waiter {
         final BooleanSupplier needed;
@@ -71,7 +75,6 @@ public class PdfSession implements ReadingSession {
     private PdfSession(Context c, Book b) {
         ctx = c.getApplicationContext();
         book = b;
-        margin = Ui.dp(ctx, 8);
         long maxHeap = Runtime.getRuntime().maxMemory();
         int budget = (int) Math.max(4 * 1024 * 1024L,
                 Math.min(MAX_CACHE_BYTES, maxHeap / 8));
@@ -87,13 +90,117 @@ public class PdfSession implements ReadingSession {
         PdfSession session = new PdfSession(c, book);
         session.source = sourceFactory.open(c, book);
         session.pageCount = session.source.pageCount();
+        session.pageRatios = new float[Math.max(1, session.pageCount)];
         return session;
     }
 
     @Override
     public void layout(ReaderPrefs prefs, ReaderTheme theme, int frameWidth, int frameHeight) {
         this.theme = theme;
-        renderWidth = Math.max(320, Math.min(frameWidth - 2 * margin, 1600));
+        this.fullPageTheme = prefs.pdfFullTheme;
+        this.frameW = Math.max(1, frameWidth);
+        applyTrimMode(prefs.pdfTrim);
+        updateRenderWidth(frameWidth);
+        if (prefs.isScroll() && pageCount > 0) {
+            int start = initialPage();
+            prewarmSync(start, trimMode);
+            if (start + 1 < pageCount) prewarmSync(start + 1, trimMode);
+        }
+    }
+
+    private void applyTrimMode(String requested) {
+        String next = ReaderPrefs.normalizeTrim(requested);
+        if (next.equals(trimMode)) {
+            PdfPageSource src = source;
+            if (src != null) src.setTrimMode(next);
+            return;
+        }
+        synchronized (ratioLock) {
+            trimMode = next;
+            pageRatios = new float[Math.max(1, pageCount)];
+            defaultPageRatio = ZoomImageView.DEFAULT_PAGE_RATIO;
+        }
+        PdfPageSource src = source;
+        if (src != null) src.setTrimMode(next);
+    }
+
+    private static String cacheKey(int page, int width, String mode) {
+        return page + "@" + width + "@" + mode;
+    }
+
+    private void updateRenderWidth(int frameWidth) {
+        // Supersample 1.35x above viewport width (capped so pinch-zoom up to 2400px can sharpen
+        // even further) so unzoomed PDF body text and diagrams are razor-sharp on screen.
+        renderWidth = Math.max(360, Math.min(Math.round(frameWidth * 1.35f), 1800));
+    }
+
+    private void prewarmSync(int page, String mode) {
+        if (closed || page < 0 || page >= pageCount) return;
+        int width = renderWidth;
+        String key = cacheKey(page, width, mode);
+        Bitmap cached = cache.get(key);
+        if (cached != null && !cached.isRecycled()) {
+            recordRatio(page, cached, mode);
+            return;
+        }
+        PdfPageSource src = source;
+        if (src == null) return;
+        try {
+            Bitmap rendered;
+            synchronized (src) {
+                src.setTrimMode(mode);
+                rendered = src.render(page, width);
+            }
+            if (rendered != null && !closed) {
+                recordRatio(page, rendered, mode);
+                synchronized (inFlight) {
+                    if (!closed) cache.put(key, rendered);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void recordRatio(int page, Bitmap bmp, String mode) {
+        if (bmp == null || bmp.getWidth() <= 0 || bmp.getHeight() <= 0) return;
+        float ratio = bmp.getHeight() / (float) bmp.getWidth();
+        synchronized (ratioLock) {
+            if (!mode.equals(trimMode)) return;
+            if (pageRatios != null && page >= 0 && page < pageRatios.length) {
+                pageRatios[page] = ratio;
+            }
+            if (page > 0 || defaultPageRatio == ZoomImageView.DEFAULT_PAGE_RATIO) {
+                defaultPageRatio = ratio;
+            }
+        }
+    }
+
+    private float ratioForPage(int page) {
+        synchronized (ratioLock) {
+            if (pageRatios != null && page >= 0 && page < pageRatios.length
+                    && pageRatios[page] > 0.05f) {
+                return pageRatios[page];
+            }
+            return defaultPageRatio;
+        }
+    }
+
+    @Override
+    public int scrollPageHeight(int page, int frameWidth, int frameHeight) {
+        int w = frameWidth > 0 ? frameWidth : frameW;
+        String mode = trimMode;
+        boolean maxTrim = ReaderPrefs.TRIM_MAX.equals(mode);
+        if (pageCount > 0) {
+            int clamped = clamp(page);
+            boolean known;
+            synchronized (ratioLock) {
+                known = pageRatios != null && clamped < pageRatios.length
+                        && pageRatios[clamped] > 0.05f;
+            }
+            if (!known) prewarmSync(clamped, mode);
+            return ZoomImageView.scrollItemHeightPx(ctx, w, ratioForPage(clamped), maxTrim);
+        }
+        return ZoomImageView.scrollItemHeightPx(ctx, w, defaultPageRatio, maxTrim);
     }
 
     @Override
@@ -103,7 +210,7 @@ public class PdfSession implements ReadingSession {
 
     @Override
     public float initialFraction() {
-        return 0f;
+        return Math.max(0f, Math.min(0.999f, book.fraction));
     }
 
     private int clamp(int page) {
@@ -143,13 +250,13 @@ public class PdfSession implements ReadingSession {
 
     @Override
     public boolean supportsViewMode() {
-        return false;
+        return true;
     }
 
     @Override
     public View createItemView(ViewGroup parent, boolean scrollMode) {
         ZoomImageView view = new ZoomImageView(parent.getContext(), scrollMode);
-        view.setTheme(theme);
+        view.setTheme(theme, fullPageTheme);
         return view;
     }
 
@@ -157,34 +264,43 @@ public class PdfSession implements ReadingSession {
     public void bindItemView(View view, int page, int itemHeightPx, boolean scrollMode) {
         activePage = page;
         final ZoomImageView imageView = (ZoomImageView) view;
-        imageView.setTheme(theme);
-        final int tag = page;
+        final String mode = trimMode;
+        imageView.setTheme(theme, fullPageTheme);
+        imageView.preparePage(page, ratioForPage(page), mode);
+        final String tag = page + "@" + mode;
         final int width = renderWidth;
         imageView.setTag(tag);
-        BooleanSupplier stillBound = () -> !closed && Integer.valueOf(tag).equals(imageView.getTag());
-        String key = page + "@" + width;
+        BooleanSupplier stillBound = () -> !closed && tag.equals(imageView.getTag());
+        String key = cacheKey(page, width, mode);
         Bitmap cached = cache.get(key);
-        if (cached != null) {
+        if (cached != null && !cached.isRecycled()) {
+            recordRatio(page, cached, mode);
             imageView.show(page, cached);
         } else {
-            request(page, width, stillBound, bitmap -> {
-                if (Integer.valueOf(tag).equals(imageView.getTag())) imageView.show(page, bitmap);
+            request(page, width, mode, stillBound, bitmap -> {
+                if (tag.equals(imageView.getTag())) imageView.show(page, bitmap);
             });
         }
-        // magnifying a PDF page only stays readable if the page is rendered again at
-        // that size; the view asks for a level and swaps the bitmap in place
         imageView.setZoomListener(level -> {
-            if (!Integer.valueOf(tag).equals(imageView.getTag())) return;
+            if (!tag.equals(imageView.getTag())) return;
             int wanted = Math.min(MAX_RENDER_WIDTH, width * level);
-            request(page, wanted, stillBound, bitmap -> {
-                if (bitmap != null && Integer.valueOf(tag).equals(imageView.getTag())) {
+            request(page, wanted, mode, stillBound, bitmap -> {
+                if (bitmap != null && tag.equals(imageView.getTag())) {
                     imageView.replaceBitmap(bitmap);
                 }
             });
         });
-        if (!scrollMode && page + 1 < pageCount) {
+        if (page + 1 < pageCount) {
             final int next = page + 1;
-            request(next, width, () -> !closed && Math.abs(next - activePage) <= 2, null);
+            request(next, width, mode,
+                    () -> !closed && mode.equals(trimMode) && Math.abs(next - activePage) <= 2,
+                    null);
+        }
+        if (page > 0) {
+            final int prev = page - 1;
+            request(prev, width, mode,
+                    () -> !closed && mode.equals(trimMode) && Math.abs(prev - activePage) <= 2,
+                    null);
         }
     }
 
@@ -192,11 +308,12 @@ public class PdfSession implements ReadingSession {
         void onBitmap(Bitmap bitmap);
     }
 
-    private void request(int page, int width, BooleanSupplier needed, BitmapCallback callback) {
+    private void request(int page, int width, String mode, BooleanSupplier needed,
+                         BitmapCallback callback) {
         if (closed) return;
-        final String key = page + "@" + width;
+        final String key = cacheKey(page, width, mode);
         Bitmap cached = cache.get(key);
-        if (cached != null) {
+        if (cached != null && !cached.isRecycled()) {
             if (callback != null) callback.onBitmap(cached);
             return;
         }
@@ -204,7 +321,6 @@ public class PdfSession implements ReadingSession {
             if (closed) return;
             List<Waiter> waiters = inFlight.get(key);
             if (waiters != null) {
-                // Attach to the already-queued render instead of rendering the same page twice.
                 waiters.add(new Waiter(needed, callback));
                 return;
             }
@@ -213,7 +329,7 @@ public class PdfSession implements ReadingSession {
             inFlight.put(key, waiters);
         }
         try {
-            renderExecutor.execute(() -> runRender(key, page, width));
+            renderExecutor.execute(() -> runRender(key, page, width, mode));
         } catch (RuntimeException rejected) {
             synchronized (inFlight) {
                 inFlight.remove(key);
@@ -221,7 +337,7 @@ public class PdfSession implements ReadingSession {
         }
     }
 
-    private void runRender(String key, int page, int width) {
+    private void runRender(String key, int page, int width, String mode) {
         List<Waiter> snapshot;
         synchronized (inFlight) {
             List<Waiter> registered = inFlight.get(key);
@@ -240,7 +356,6 @@ public class PdfSession implements ReadingSession {
         }
         if (!anyNeeded) {
             synchronized (inFlight) {
-                // Re-check under lock in case a fresh viewer attached right before removal.
                 List<Waiter> current = inFlight.get(key);
                 if (current != null && current.size() == snapshot.size()) {
                     inFlight.remove(key);
@@ -253,11 +368,17 @@ public class PdfSession implements ReadingSession {
         PdfPageSource src = source;
         if (!closed && src != null) {
             try {
-                bitmap = src.render(page, width);
+                synchronized (src) {
+                    src.setTrimMode(mode);
+                    bitmap = src.render(page, width);
+                }
             } catch (Exception ignored) {
             }
         }
         List<Waiter> waiters;
+        if (bitmap != null && !closed) {
+            recordRatio(page, bitmap, mode);
+        }
         synchronized (inFlight) {
             waiters = inFlight.remove(key);
             if (bitmap != null && !closed) {
@@ -280,28 +401,41 @@ public class PdfSession implements ReadingSession {
     }
 
     @Override
+    public void setPdfFullTheme(boolean fullPage) {
+        this.fullPageTheme = fullPage;
+    }
+
+    @Override
     public boolean needsRelayout(ReaderPrefs prefs) {
-        return false;
+        return !trimMode.equals(ReaderPrefs.normalizeTrim(prefs.pdfTrim));
     }
 
     @Override
     public int relayout(ReaderPrefs prefs, int frameWidth, int frameHeight, int currentPage,
                         float currentFraction) {
-        renderWidth = Math.max(320, Math.min(frameWidth - 2 * margin, 1600));
-        return clamp(currentPage);
+        this.fullPageTheme = prefs.pdfFullTheme;
+        this.frameW = Math.max(1, frameWidth);
+        applyTrimMode(prefs.pdfTrim);
+        updateRenderWidth(frameWidth);
+        int target = clamp(currentPage);
+        if (pageCount > 0) {
+            String mode = trimMode;
+            prewarmSync(target, mode);
+            if (prefs.isScroll() && target + 1 < pageCount) prewarmSync(target + 1, mode);
+        }
+        return target;
     }
 
     @Override
     public void persistPosition(int page, float fraction, int frameHeight) {
         int index = clamp(page);
+        float clampedFraction = Math.max(0f, Math.min(0.999f, fraction));
         book.chapter = -1;
         book.offset = index;
-        book.fraction = 0f;
+        book.fraction = clampedFraction;
         book.progress = (index + 1) / (float) Math.max(1, pageCount);
-        Library.updatePosition(ctx, book.id(), -1, index, 0f, book.progress);
+        Library.updatePosition(ctx, book.id(), -1, index, clampedFraction, book.progress);
     }
-
-    // ---------------------------------------------------------------- bookmarks
 
     @Override
     public boolean isBookmarked(int page) {
@@ -363,12 +497,7 @@ public class PdfSession implements ReadingSession {
     @Override
     public void trimMemory(int level) {
         if (closed) return;
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
-                || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            cache.evictAll();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            cache.trimToSize(cache.maxSize() / 2);
-        }
+        Ui.trimCache(cache, level);
     }
 
     @Override

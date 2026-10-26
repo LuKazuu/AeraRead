@@ -1,7 +1,10 @@
 package com.aera.read.ui;
 
-import android.graphics.Color;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -11,25 +14,23 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
-import com.google.android.material.appbar.MaterialToolbar;
-import com.google.android.material.progressindicator.CircularProgressIndicator;
-import com.google.android.material.snackbar.Snackbar;
 import com.aera.read.R;
 import com.aera.read.data.Book;
 import com.aera.read.data.Library;
@@ -40,14 +41,23 @@ import com.aera.read.reader.PdfSession;
 import com.aera.read.reader.ReadingSession;
 import com.aera.read.util.Fonts;
 import com.aera.read.util.Ui;
+import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.progressindicator.CircularProgressIndicator;
+import com.google.android.material.snackbar.Snackbar;
 
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.IntUnaryOperator;
 
 public class ReaderActivity extends AppCompatActivity {
 
     public static final String EXTRA_BOOK_ID = "book_id";
+
+    private static final long TAP_ANIM_NS = 180_000_000L;
+    private static final long FIRST_FRAME_LEAD_NS = 16_000_000L;
+    private static final long PREVIEW_INTERVAL_MS = 90;
 
     private Book book;
     private ReaderPrefs prefs;
@@ -82,23 +92,44 @@ public class ReaderActivity extends AppCompatActivity {
     private boolean updatingSlider;
     private boolean sliderDragging;
 
-    private static final long TAP_ANIM_NS = 180_000_000L;
-    private static final long FIRST_FRAME_LEAD_NS = 16_000_000L;
-    private boolean pageAnimRunning;
-    private long pageAnimStartNs;
-    private int pageAnimTotalPx;
-    private int pageAnimAppliedPx;
     private int lastPagedDx;
-
-    private boolean scrollAnimRunning;
-    private long scrollAnimStartNs;
-    private int scrollAnimTotalPx;
-    private int scrollAnimAppliedPx;
     private int lastScrolledDy;
+    private final GlideAnimator pageGlide = new GlideAnimator(
+            delta -> {
+                RecyclerView rv = pagerList();
+                lastPagedDx = 0;
+                if (rv != null) rv.scrollBy(delta, 0);
+                return lastPagedDx;
+            },
+            () -> {
+                snapPagerToCurrentPage();
+                persistPosition();
+            });
+    private final GlideAnimator scrollGlide = new GlideAnimator(
+            delta -> {
+                lastScrolledDy = 0;
+                if (scrollList != null) scrollList.scrollBy(0, delta);
+                return lastScrolledDy;
+            },
+            this::persistPosition);
 
     private float downX;
     private float downY;
     private int maxPointers;
+
+    private int loadGeneration;
+    private int navTicks;
+    private int laidSize = -1;
+    private int laidLine = -1;
+    private String laidFont = "";
+    private int laidFrameW = -1;
+    private int laidFrameH = -1;
+    private boolean previewing;
+    private boolean firstPreview;
+    private boolean releaseAnchor;
+    private boolean previewQueued;
+    private boolean previewScheduled;
+    private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,7 +140,6 @@ public class ReaderActivity extends AppCompatActivity {
             return;
         }
         prefs = new ReaderPrefs(this);
-        // a font that is no longer on the device must not be shown as chosen
         if (!Fonts.isAvailable(this, prefs.font)) {
             prefs.font = Fonts.SYSTEM;
             prefs.save();
@@ -117,20 +147,19 @@ public class ReaderActivity extends AppCompatActivity {
         theme = ReaderTheme.from(prefs.theme);
 
         setContentView(R.layout.activity_reader);
-        getOnBackPressedDispatcher().addCallback(this,
-                new androidx.activity.OnBackPressedCallback(true) {
-                    @Override
-                    public void handleOnBackPressed() {
-                        if (!chromeVisible) {
-                            setChromeVisible(true);
-                            return;
-                        }
-                        flushAnimations();
-                        persistPosition();
-                        setEnabled(false);
-                        getOnBackPressedDispatcher().onBackPressed();
-                    }
-                });
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (!chromeVisible) {
+                    setChromeVisible(true);
+                    return;
+                }
+                flushAnimations();
+                persistPosition();
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+            }
+        });
         bindViews();
         setupWindow();
         setupInsets();
@@ -147,6 +176,14 @@ public class ReaderActivity extends AppCompatActivity {
             Thread t = new Thread(r, "aera-reader-bg");
             t.setDaemon(true);
             return t;
+        });
+        contentFrame.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (session == null || isFinishing() || isDestroyed()) return;
+            int w = frameW();
+            int h = frameH();
+            if (laidFrameW > 0 && laidFrameH > 0 && (w != laidFrameW || h != laidFrameH)) {
+                requestRelayout(true);
+            }
         });
         contentFrame.post(this::startLoad);
     }
@@ -166,25 +203,23 @@ public class ReaderActivity extends AppCompatActivity {
         percentLabel = findViewById(R.id.percent_label);
     }
 
+    @SuppressWarnings("deprecation")
     private void setupWindow() {
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        Ui.enableEdgeToEdge(this);
         if (Build.VERSION.SDK_INT >= 29) {
-            getWindow().setNavigationBarContrastEnforced(false);
             getWindow().setStatusBarContrastEnforced(false);
         }
     }
 
     private void setupInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            // page content stays clear of the system bars; the controls float above it
-            contentFrame.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            topBar.setPadding(topBar.getPaddingLeft(), bars.top + Ui.dp(this, 4),
-                    topBar.getPaddingRight(), Ui.dp(this, 12));
-            bottomBar.setPadding(Ui.dp(this, 20), Ui.dp(this, 8), Ui.dp(this, 20),
-                    bars.bottom + Ui.dp(this, 6));
+            Insets safe = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            contentFrame.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            topBar.setPadding(safe.left, safe.top + Ui.dp(this, 4),
+                    safe.right, Ui.dp(this, 12));
+            bottomBar.setPadding(Ui.dp(this, 20) + safe.left, Ui.dp(this, 8),
+                    Ui.dp(this, 20) + safe.right, safe.bottom + Ui.dp(this, 6));
             return insets;
         });
     }
@@ -241,10 +276,7 @@ public class ReaderActivity extends AppCompatActivity {
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override
             public void onPageSelected(int position) {
-                if (pageAnimRunning) return;
-                // The pager can deliver an event for an item it has already scrolled past,
-                // e.g. when several jumps happen inside one frame. Only the item it is on
-                // now counts, or a fast reader would be dragged back a page.
+                if (pageGlide.isRunning()) return;
                 if (position != pager.getCurrentItem()) return;
                 if (position != currentPage) {
                     currentPage = position;
@@ -260,13 +292,13 @@ public class ReaderActivity extends AppCompatActivity {
     private void setupScroll() {
         scrollList.setLayoutManager(new LinearLayoutManager(this));
         scrollList.setItemAnimator(null);
-        scrollList.setHasFixedSize(true);
+        scrollList.setItemViewCacheSize(4);
         scrollList.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
                 lastScrolledDy = dy;
-                if (!scrollMode) return;
-                if (dy != 0 && session != null) session.noteNavigation();
+                if (!scrollMode || dy == 0) return;
+                if (session != null) session.noteNavigation();
                 int first = firstVisiblePage();
                 if (first != RecyclerView.NO_POSITION) {
                     boolean pageChanged = first != currentPage;
@@ -304,7 +336,6 @@ public class ReaderActivity extends AppCompatActivity {
         });
     }
 
-    /** Drives the screen from the slider, including while the thumb is still moving. */
     void onSliderProgress(int page, boolean fromUser) {
         if (!fromUser || updatingSlider || session == null) return;
         pageLabel.setText(session.pageLabel(page));
@@ -329,6 +360,7 @@ public class ReaderActivity extends AppCompatActivity {
                 ReadingSession loaded = book.isPdf() ? PdfSession.open(this, book)
                         : EpubSession.open(this, book);
                 loaded.setTheme(theme);
+                loaded.setPdfFullTheme(prefs.pdfFullTheme);
                 loaded.layout(prefs, theme, w, h);
                 int page = loaded.initialPage();
                 float fraction = loaded.initialFraction();
@@ -337,7 +369,7 @@ public class ReaderActivity extends AppCompatActivity {
                         loaded.close();
                         return;
                     }
-                    onLoaded(loaded, page, fraction);
+                    onLoaded(loaded, page, fraction, w, h);
                 });
             } catch (Throwable t) {
                 runOnUiThread(() -> {
@@ -350,26 +382,24 @@ public class ReaderActivity extends AppCompatActivity {
         });
     }
 
-    private int loadGeneration;
-    /** Bumped every time the reader moves; a re-layout that lands later must notice. */
-    private int navTicks;
-
-    private void rememberLayout() {
+    private void rememberLayout(int w, int h) {
         laidSize = prefs.sizeSp;
         laidLine = prefs.linePct;
         laidFont = prefs.font;
+        laidFrameW = w;
+        laidFrameH = h;
     }
 
-    private void onLoaded(ReadingSession loaded, int page, float fraction) {
+    private void onLoaded(ReadingSession loaded, int page, float fraction, int w, int h) {
         session = loaded;
-        rememberLayout();
+        rememberLayout(w, h);
         layoutRunning = false;
         layoutPending = false;
         layoutPendingQuiet = true;
         pageCount = loaded.pageCount();
         scrollMode = prefs.isScroll() && loaded.supportsViewMode();
         currentPage = clamp(page);
-        currentFraction = Math.max(0f, Math.min(0.95f, fraction));
+        currentFraction = Math.max(0f, Math.min(0.999f, fraction));
         buildAdapters();
         showLoading(false);
         applyModeVisibility();
@@ -404,14 +434,11 @@ public class ReaderActivity extends AppCompatActivity {
         if (scrollAdapter != null) scrollAdapter.submitPageCount(session.pageCount());
     }
 
-    /** Moves the pager without asking for an animation, and never while it is laying out. */
     private void setPagerPage(int page) {
         if (pager.getCurrentItem() == page) return;
-        // ViewPager2 is a RecyclerView wrapper: touching it mid-layout throws
         if (pager.getChildCount() > 0
-                && pager.getChildAt(0) instanceof androidx.recyclerview.widget.RecyclerView
-                && ((androidx.recyclerview.widget.RecyclerView) pager.getChildAt(0))
-                        .isComputingLayout()) {
+                && pager.getChildAt(0) instanceof RecyclerView
+                && ((RecyclerView) pager.getChildAt(0)).isComputingLayout()) {
             pager.post(() -> setPagerPage(page));
             return;
         }
@@ -427,7 +454,7 @@ public class ReaderActivity extends AppCompatActivity {
 
     private void updateChrome() {
         if (session == null) return;
-        if (!java.util.Objects.equals(topBar.getTitle(), book.title)) {
+        if (!Objects.equals(topBar.getTitle(), book.title)) {
             topBar.setTitle(book.title);
         }
 
@@ -514,16 +541,25 @@ public class ReaderActivity extends AppCompatActivity {
         if (first == RecyclerView.NO_POSITION) return 0f;
         View child = scrollList.getLayoutManager() == null ? null
                 : scrollList.getLayoutManager().findViewByPosition(first);
-        int height = frameH();
+        int height = (child != null && child.getHeight() > 0) ? child.getHeight() : frameH();
         if (child == null || height <= 0) return 0f;
-        return Math.max(0f, Math.min(0.95f, -child.getTop() / (float) height));
+        return Math.max(0f, Math.min(0.999f, -child.getTop() / (float) height));
     }
 
     private void restoreScroll(int page, float fraction) {
         RecyclerView.LayoutManager manager = scrollList.getLayoutManager();
         if (!(manager instanceof LinearLayoutManager)) return;
-        int offset = -Math.round(Math.max(0f, Math.min(0.95f, fraction)) * frameH());
-        ((LinearLayoutManager) manager).scrollToPositionWithOffset(clamp(page), offset);
+        int target = clamp(page);
+        float clampedFraction = Math.max(0f, Math.min(0.999f, fraction));
+        int offset = 0;
+        if (clampedFraction > 0.0005f) {
+            int refH = session != null
+                    ? session.scrollPageHeight(target, frameW(), frameH())
+                    : frameH();
+            int maxOff = Math.max(0, refH - 1);
+            offset = -Math.min(maxOff, Math.round(clampedFraction * refH));
+        }
+        ((LinearLayoutManager) manager).scrollToPositionWithOffset(target, offset);
     }
 
     private void turnPage(int delta) {
@@ -532,7 +568,8 @@ public class ReaderActivity extends AppCompatActivity {
             int dy = (int) (frameH() * 0.85f);
             navTicks++;
             session.noteNavigation();
-            animateScrollStep(delta > 0 ? dy : -dy);
+            scrollList.stopScroll();
+            scrollGlide.addStep(delta > 0 ? dy : -dy);
             return;
         }
         int prev = currentPage;
@@ -544,168 +581,120 @@ public class ReaderActivity extends AppCompatActivity {
             currentFraction = 0f;
             navTicks++;
             session.noteNavigation();
-            animatePageStep((target - prev) * dirSign);
+            RecyclerView pagerRv = pagerList();
+            int w = pager.getWidth();
+            if (pagerRv == null || w <= 0) {
+                pager.setCurrentItem(currentPage, false);
+            } else {
+                pagerRv.stopScroll();
+                pageGlide.addStep((target - prev) * dirSign * w);
+            }
             updateChrome();
             persistPosition();
         }
     }
 
-    private static float easeOut(float raw) {
-        float inv = 1f - Math.max(0f, Math.min(1f, raw));
-        return 1f - inv * inv * inv;
+    private void flushAnimations() {
+        scrollGlide.flush();
+        pageGlide.flush();
+        snapPagerToCurrentPage();
     }
 
-    private void onScrollVsync(long frameTimeNanos) {
-        if (!scrollAnimRunning || scrollList == null) return;
-        if (scrollAnimStartNs < 0L) scrollAnimStartNs = frameTimeNanos - FIRST_FRAME_LEAD_NS;
-        long elapsedNs = Math.max(0L, frameTimeNanos - scrollAnimStartNs);
-        boolean done = elapsedNs >= TAP_ANIM_NS;
-        float u = done ? 1f : easeOut(elapsedNs / (float) TAP_ANIM_NS);
-        int want = Math.round(scrollAnimTotalPx * u) - scrollAnimAppliedPx;
-        if (want != 0) {
-            scrollAnimAppliedPx += want;
-            lastScrolledDy = 0;
-            scrollList.scrollBy(0, want);
-            if ((want > 0 && lastScrolledDy < want)
-                    || (want < 0 && lastScrolledDy > want)) {
-                scrollAnimRunning = false;
-                scrollAnimTotalPx = 0;
-                scrollAnimAppliedPx = 0;
-                persistPosition();
-                return;
-            }
-        }
-        if (done) {
-            scrollAnimRunning = false;
-            scrollAnimTotalPx = 0;
-            scrollAnimAppliedPx = 0;
-            persistPosition();
-        } else {
-            Choreographer.getInstance().postFrameCallback(scrollFrameCb);
-        }
-    }
-
-    private void onPageVsync(long frameTimeNanos) {
-        RecyclerView pagerRv = pagerList();
-        if (!pageAnimRunning || pagerRv == null) return;
-        if (pageAnimStartNs < 0L) pageAnimStartNs = frameTimeNanos - FIRST_FRAME_LEAD_NS;
-        long elapsedNs = Math.max(0L, frameTimeNanos - pageAnimStartNs);
-        boolean done = elapsedNs >= TAP_ANIM_NS;
-        float u = done ? 1f : easeOut(elapsedNs / (float) TAP_ANIM_NS);
-        int want = Math.round(pageAnimTotalPx * u) - pageAnimAppliedPx;
-        if (want != 0) {
-            pageAnimAppliedPx += want;
-            lastPagedDx = 0;
-            pagerRv.scrollBy(want, 0);
-            if ((want > 0 && lastPagedDx < want)
-                    || (want < 0 && lastPagedDx > want)) {
-                pageAnimRunning = false;
-                pageAnimTotalPx = 0;
-                pageAnimAppliedPx = 0;
-                if (pager.getCurrentItem() != currentPage) pager.setCurrentItem(currentPage, false);
-                persistPosition();
-                return;
-            }
-        }
-        if (done) {
-            pageAnimRunning = false;
-            pageAnimTotalPx = 0;
-            pageAnimAppliedPx = 0;
-            if (pager.getCurrentItem() != currentPage) pager.setCurrentItem(currentPage, false);
-            persistPosition();
-        } else {
-            Choreographer.getInstance().postFrameCallback(pageFrameCb);
-        }
-    }
-
-    /**
-     * Drives vertical scroll steps directly on {@link Choreographer} instead of
-     * {@link RecyclerView#smoothScrollBy(int, int)}. {@code RecyclerView} stays in
-     * {@code SCROLL_STATE_IDLE}, so rapid thumb taps never brake mid-flight steps,
-     * Battery Saver never disables motion, and overlapping taps add cleanly with zero lost pixels.
-     */
-    private void animateScrollStep(int stepPx) {
-        scrollList.stopScroll();
-        int remaining = scrollAnimRunning ? (scrollAnimTotalPx - scrollAnimAppliedPx) : 0;
-        scrollAnimTotalPx = remaining + stepPx;
-        scrollAnimAppliedPx = 0;
-        Choreographer.getInstance().removeFrameCallback(scrollFrameCb);
-        if (scrollAnimTotalPx == 0) {
-            scrollAnimRunning = false;
-            persistPosition();
-            return;
-        }
-        scrollAnimRunning = true;
-        scrollAnimStartNs = -1L;
-        Choreographer.getInstance().postFrameCallback(scrollFrameCb);
-    }
-
-    /**
-     * Identical additive hardware-VSYNC glide applied horizontally to {@link ViewPager2}'s
-     * backing {@link RecyclerView}. Pages slide continuously right-to-left (or left-to-right
-     * when going back / in R/L mode); rapid repeated taps accelerate the real page stream
-     * forward without ever resetting position, allocating bitmaps, or holding back motion.
-     */
-    private void animatePageStep(int signedPages) {
-        RecyclerView pagerRv = pagerList();
-        int w = pager.getWidth();
-        if (pagerRv == null || w <= 0) {
+    private void snapPagerToCurrentPage() {
+        if (pager == null || scrollMode) return;
+        if (pager.getCurrentItem() != currentPage) {
             pager.setCurrentItem(currentPage, false);
             return;
         }
-        pagerRv.stopScroll();
-        int remaining = pageAnimRunning ? (pageAnimTotalPx - pageAnimAppliedPx) : 0;
-        pageAnimTotalPx = remaining + signedPages * w;
-        pageAnimAppliedPx = 0;
-        Choreographer.getInstance().removeFrameCallback(pageFrameCb);
-        if (pageAnimTotalPx == 0) {
-            pageAnimRunning = false;
-            if (pager.getCurrentItem() != currentPage) pager.setCurrentItem(currentPage, false);
-            persistPosition();
-            return;
-        }
-        pageAnimRunning = true;
-        pageAnimStartNs = -1L;
-        Choreographer.getInstance().postFrameCallback(pageFrameCb);
-    }
-
-    private final Choreographer.FrameCallback scrollFrameCb = this::onScrollVsync;
-    private final Choreographer.FrameCallback pageFrameCb = this::onPageVsync;
-
-    private void cancelPageAnim() {
-        pageAnimRunning = false;
-        Choreographer.getInstance().removeFrameCallback(pageFrameCb);
-        pageAnimTotalPx = 0;
-        pageAnimAppliedPx = 0;
-    }
-
-    private void cancelScrollAnim() {
-        scrollAnimRunning = false;
-        Choreographer.getInstance().removeFrameCallback(scrollFrameCb);
-        scrollAnimTotalPx = 0;
-        scrollAnimAppliedPx = 0;
-    }
-
-    private void flushAnimations() {
-        if (scrollAnimRunning) {
-            int rem = scrollAnimTotalPx - scrollAnimAppliedPx;
-            cancelScrollAnim();
-            if (rem != 0 && scrollList != null) scrollList.scrollBy(0, rem);
-        }
-        if (pageAnimRunning) {
-            int rem = pageAnimTotalPx - pageAnimAppliedPx;
-            cancelPageAnim();
-            RecyclerView pagerRv = pagerList();
-            if (rem != 0 && pagerRv != null) pagerRv.scrollBy(rem, 0);
-            if (pager != null && pager.getCurrentItem() != currentPage) {
-                pager.setCurrentItem(currentPage, false);
-            }
+        RecyclerView rv = pagerList();
+        if (rv == null || rv.getScrollState() != RecyclerView.SCROLL_STATE_IDLE) return;
+        RecyclerView.LayoutManager lm = rv.getLayoutManager();
+        View active = lm == null ? null : lm.findViewByPosition(currentPage);
+        if (active == null) {
+            pager.setCurrentItem(currentPage, false);
+        } else if (active.getLeft() != 0) {
+            rv.scrollBy(active.getLeft(), 0);
         }
     }
 
     private void cancelAnimations() {
-        cancelPageAnim();
-        cancelScrollAnim();
+        pageGlide.cancel();
+        scrollGlide.cancel();
+    }
+
+    /** Unified hardware-VSYNC additive glide animator for both paged and scroll steps. */
+    private static final class GlideAnimator implements Choreographer.FrameCallback {
+        private final IntUnaryOperator scrollStep;
+        private final Runnable onSettled;
+        private boolean running;
+        private long startNs;
+        private int totalPx;
+        private int appliedPx;
+
+        GlideAnimator(IntUnaryOperator scrollStep, Runnable onSettled) {
+            this.scrollStep = scrollStep;
+            this.onSettled = onSettled;
+        }
+
+        boolean isRunning() {
+            return running;
+        }
+
+        void addStep(int stepPx) {
+            int remaining = running ? (totalPx - appliedPx) : 0;
+            totalPx = remaining + stepPx;
+            appliedPx = 0;
+            Choreographer.getInstance().removeFrameCallback(this);
+            if (totalPx == 0) {
+                running = false;
+                onSettled.run();
+                return;
+            }
+            running = true;
+            startNs = -1L;
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+
+        void cancel() {
+            running = false;
+            Choreographer.getInstance().removeFrameCallback(this);
+            totalPx = 0;
+            appliedPx = 0;
+        }
+
+        void flush() {
+            if (!running) return;
+            int rem = totalPx - appliedPx;
+            cancel();
+            if (rem != 0) scrollStep.applyAsInt(rem);
+            onSettled.run();
+        }
+
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            if (!running) return;
+            if (startNs < 0L) startNs = frameTimeNanos - FIRST_FRAME_LEAD_NS;
+            long elapsedNs = Math.max(0L, frameTimeNanos - startNs);
+            boolean done = elapsedNs >= TAP_ANIM_NS;
+            float inv = 1f - Math.max(0f, Math.min(1f, elapsedNs / (float) TAP_ANIM_NS));
+            float u = done ? 1f : (1f - inv * inv * inv);
+            int want = Math.round(totalPx * u) - appliedPx;
+            if (want != 0) {
+                appliedPx += want;
+                int actual = scrollStep.applyAsInt(want);
+                if ((want > 0 && actual < want) || (want < 0 && actual > want)) {
+                    cancel();
+                    onSettled.run();
+                    return;
+                }
+            }
+            if (done) {
+                cancel();
+                onSettled.run();
+            } else {
+                Choreographer.getInstance().postFrameCallback(this);
+            }
+        }
     }
 
     void goToPage(int page) {
@@ -714,22 +703,35 @@ public class ReaderActivity extends AppCompatActivity {
         persistPosition();
     }
 
-    /** Moves the view to a page and refreshes the chrome, without touching storage. */
     private void showPage(int page) {
         flushAnimations();
         currentPage = page;
         currentFraction = 0f;
         session.noteNavigation();
-        if (scrollMode) {
-            restoreScroll(currentPage, 0f);
-        } else {
-            setPagerPage(currentPage);
-        }
+        if (scrollMode) restoreScroll(currentPage, 0f);
+        else setPagerPage(currentPage);
         updateChrome();
+    }
+
+    private void syncScrollPosition() {
+        if (!scrollMode || layoutRunning || scrollList == null
+                || scrollList.getChildCount() == 0 || scrollList.isLayoutRequested()) {
+            return;
+        }
+        if (laidFrameW > 0 && laidFrameH > 0
+                && (frameW() != laidFrameW || frameH() != laidFrameH)) {
+            return;
+        }
+        int first = firstVisiblePage();
+        if (first != RecyclerView.NO_POSITION) {
+            currentPage = clamp(first);
+            currentFraction = scrollFraction();
+        }
     }
 
     void persistPosition() {
         if (session == null) return;
+        syncScrollPosition();
         session.persistPosition(currentPage, scrollMode ? currentFraction : 0f, frameH());
     }
 
@@ -766,26 +768,29 @@ public class ReaderActivity extends AppCompatActivity {
 
     void onAppearanceChanged(boolean needsRelayout) {
         flushAnimations();
-        // the sheet persists to storage; re-read so this activity can never hold stale values
         prefs = new ReaderPrefs(this);
+        if (session != null && session.needsRelayout(prefs)) {
+            needsRelayout = true;
+        }
         if (session != null && session.supportsTypography()
                 && (prefs.sizeSp != laidSize || prefs.linePct != laidLine
-                    || !prefs.font.equals(laidFont))) {
+                || !prefs.font.equals(laidFont))) {
             needsRelayout = true;
         }
         if (previewing) {
             previewing = false;
             previewQueued = false;
             if (needsRelayout) {
-                // the release re-layouts from the same spot the drag started on, so the page
-                // never jumps back when the finger lifts; the pin is dropped afterwards
                 releaseAnchor = true;
             } else if (session != null) {
                 session.clearAnchor();
             }
         }
         theme = ReaderTheme.from(prefs.theme);
-        if (session != null) session.setTheme(theme);
+        if (session != null) {
+            session.setTheme(theme);
+            session.setPdfFullTheme(prefs.pdfFullTheme);
+        }
         boolean wasScroll = scrollMode;
         scrollMode = prefs.isScroll() && session != null && session.supportsViewMode();
         applyTheme();
@@ -799,24 +804,35 @@ public class ReaderActivity extends AppCompatActivity {
             return;
         }
         if (wasScroll != scrollMode) {
+            currentFraction = 0f;
             if (scrollMode) restoreScroll(currentPage, 0f);
             else setPagerPage(currentPage);
         }
+        applyThemeToMountedPages();
         refreshAdapters();
         updateChrome();
     }
 
-    /**
-     * Live typography change from a slider that is still being dragged. The spot the drag
-     * started on is pinned for the whole gesture, so repeated re-layouts stay put instead of
-     * drifting backwards page by page, and a burst of ticks is coalesced into one pass.
-     */
+    private void applyThemeToMountedPages() {
+        for (RecyclerView list : new RecyclerView[]{pagerList(), scrollList}) {
+            if (list == null) continue;
+            for (int i = 0; i < list.getChildCount(); i++) {
+                View child = list.getChildAt(i);
+                if (child instanceof PageView) {
+                    ((PageView) child).setTheme(theme);
+                } else if (child instanceof ZoomImageView) {
+                    ((ZoomImageView) child).setTheme(theme, prefs.pdfFullTheme);
+                }
+            }
+        }
+    }
+
     void onAppearancePreview() {
         prefs = new ReaderPrefs(this);
         if (session == null) return;
         if (prefs.sizeSp == laidSize && prefs.linePct == laidLine
                 && prefs.font.equals(laidFont)) {
-            return;     // a touch that has not moved anything yet
+            return;
         }
         if (!previewing) {
             previewing = true;
@@ -826,7 +842,6 @@ public class ReaderActivity extends AppCompatActivity {
         previewQueued = true;
         if (previewScheduled) return;
         previewScheduled = true;
-        // the change that starts a gesture shows up at once; the rest of the drag is throttled
         long delay = firstPreview ? 0 : PREVIEW_INTERVAL_MS;
         firstPreview = false;
         ui.postDelayed(() -> {
@@ -838,38 +853,23 @@ public class ReaderActivity extends AppCompatActivity {
         }, delay);
     }
 
-    /** One re-layout at most this often while a slider is under the finger. */
-    private static final long PREVIEW_INTERVAL_MS = 90;
-    private int laidSize = -1;
-    private int laidLine = -1;
-    private String laidFont = "";
-    private boolean previewing;
-    private boolean firstPreview;
-    private boolean releaseAnchor;
-    private boolean previewQueued;
-    private boolean previewScheduled;
-    private final Handler ui = new Handler(Looper.getMainLooper());
-
     private void relayoutAsync() {
-        requestRelayout(false);
+        requestRelayout(session != null && !session.supportsTypography());
     }
 
-    /**
-     * Re-paginate on the background thread. While a drag keeps asking for more, only one run
-     * is in flight and the newest request is served when it lands, so the queue can't grow.
-     */
     private void requestRelayout(boolean quiet) {
-        if (isFinishing() || isDestroyed()) return;
+        if (isFinishing() || isDestroyed() || session == null) return;
         if (layoutRunning) {
             layoutPending = true;
             layoutPendingQuiet &= quiet;
             return;
         }
         layoutRunning = true;
+        syncScrollPosition();
         final int generation = ++loadGeneration;
         final int nav = navTicks;
         final int page = currentPage;
-        final float fraction = currentFraction;
+        final float fraction = scrollMode ? currentFraction : 0f;
         final int w = frameW();
         final int h = frameH();
         final ReadingSession target = session;
@@ -895,19 +895,25 @@ public class ReaderActivity extends AppCompatActivity {
                     return;
                 }
                 if (nav != navTicks) {
-                    // the reader turned pages while this pass was running: the page it
-                    // maps to is stale, and the spot it held is not where they are now
                     session.clearAnchor();
                     requestRelayout(quiet);
                     return;
                 }
                 flushAnimations();
                 pageCount = target.pageCount();
-                rememberLayout();
+                rememberLayout(w, h);
+                if (target.supportsTypography()
+                        && scrollAdapter != null && scrollAdapter.itemHeightPx() != h) {
+                    buildAdapters();
+                } else {
+                    refreshAdapters();
+                }
+                float nextFraction = target.supportsTypography()
+                        ? 0f
+                        : Math.max(0f, Math.min(0.999f, fraction));
                 currentPage = clamp(mapped);
-                currentFraction = 0f;
-                refreshAdapters();
-                if (scrollMode) restoreScroll(currentPage, 0f);
+                currentFraction = nextFraction;
+                if (scrollMode) restoreScroll(currentPage, nextFraction);
                 else setPagerPage(currentPage);
                 showLoading(false);
                 updateChrome();
@@ -915,7 +921,6 @@ public class ReaderActivity extends AppCompatActivity {
                     releaseAnchor = false;
                     session.clearAnchor();
                 }
-                // a preview is not a place to remember; the release commits the final page
                 if (!previewing) persistPosition();
                 runPendingLayout();
             });
@@ -938,7 +943,7 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     private void applyTheme() {
-        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(theme.bg));
+        getWindow().setBackgroundDrawable(new ColorDrawable(theme.bg));
         root.setBackgroundColor(theme.bg);
         contentFrame.setBackground(null);
         pager.setBackground(null);
@@ -958,21 +963,16 @@ public class ReaderActivity extends AppCompatActivity {
 
         pageLabel.setTextColor(theme.subtle);
         percentLabel.setTextColor(theme.subtle);
-        if (slider.getProgressDrawable() instanceof android.graphics.drawable.LayerDrawable) {
-            android.graphics.drawable.LayerDrawable track =
-                    (android.graphics.drawable.LayerDrawable) slider.getProgressDrawable()
-                            .mutate();
-            android.graphics.drawable.Drawable rest =
-                    track.findDrawableByLayerId(android.R.id.background);
-            android.graphics.drawable.Drawable read =
-                    track.findDrawableByLayerId(android.R.id.progress);
+        if (slider.getProgressDrawable() instanceof LayerDrawable) {
+            LayerDrawable track = (LayerDrawable) slider.getProgressDrawable().mutate();
+            Drawable rest = track.findDrawableByLayerId(android.R.id.background);
+            Drawable read = track.findDrawableByLayerId(android.R.id.progress);
             if (rest != null) rest.setTint(Ui.alpha(theme.fg, 0.18f));
             if (read != null) read.setTint(Ui.alpha(theme.fg, 0.9f));
             slider.setProgressDrawable(track);
         }
         if (slider.getThumb() != null) {
-            slider.getThumb().mutate().setTintList(
-                    android.content.res.ColorStateList.valueOf(theme.fg));
+            slider.getThumb().mutate().setTintList(ColorStateList.valueOf(theme.fg));
         }
 
         loadingView.setBackgroundColor(theme.bg);
@@ -981,13 +981,12 @@ public class ReaderActivity extends AppCompatActivity {
         Ui.setLightSystemBars(this, !theme.dark);
     }
 
-    /** Solid behind the controls, fading to transparent so covered text melts away. */
-    private android.graphics.drawable.GradientDrawable makeScrim(boolean top) {
+    private GradientDrawable makeScrim(boolean top) {
         int solid = theme.bg;
         int clear = Ui.alpha(theme.bg, 0f);
-        return new android.graphics.drawable.GradientDrawable(
-                top ? android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
-                        : android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,
+        return new GradientDrawable(
+                top ? GradientDrawable.Orientation.TOP_BOTTOM
+                        : GradientDrawable.Orientation.BOTTOM_TOP,
                 new int[]{solid, solid, clear});
     }
 
@@ -1004,9 +1003,9 @@ public class ReaderActivity extends AppCompatActivity {
 
     private void updateKeepScreenOn() {
         if (prefs.keepScreenOn) {
-            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
-            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
     }
 
@@ -1056,7 +1055,6 @@ public class ReaderActivity extends AppCompatActivity {
         if (isInside(topBar, x, y) || isInside(bottomBar, x, y)) return;
         float width = contentFrame.getWidth();
         if (width <= 0) return;
-        // a tap on a magnified page only puts it back to fit, in either mode
         if (resetVisibleZoom()) return;
         if (scrollMode) {
             if (x < width * 0.30f) turnPage(-1);
@@ -1070,33 +1068,23 @@ public class ReaderActivity extends AppCompatActivity {
         else setChromeVisible(!chromeVisible);
     }
 
-    /** Puts any magnified page back to fit; true when one was. */
     private boolean resetVisibleZoom() {
         RecyclerView list = scrollMode ? scrollList : pagerList();
         if (list == null) return false;
         for (int i = 0; i < list.getChildCount(); i++) {
             View item = list.getChildAt(i);
-            if (item instanceof PageView && ((PageView) item).isZoomed()) {
-                ((PageView) item).resetZoom();
+            if (item instanceof ZoomablePage && ((ZoomablePage) item).isZoomed()) {
+                ((ZoomablePage) item).resetZoom();
                 return true;
-            }
-            if (item instanceof ZoomImageView) {
-                ZoomImageView pdf = (ZoomImageView) item;
-                if (pdf.isZoomed()) {
-                    pdf.resetZoom();
-                    return true;
-                }
             }
         }
         return false;
     }
 
-    /** The list ViewPager2 keeps its pages in. */
     private RecyclerView pagerList() {
         View child = pager.getChildAt(0);
         return child instanceof RecyclerView ? (RecyclerView) child : null;
     }
-
 
     private boolean isInside(View view, float x, float y) {
         if (view.getVisibility() != View.VISIBLE || view.getAlpha() < 0.5f) return false;
@@ -1108,7 +1096,6 @@ public class ReaderActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------------ lifecycle
 
-    // test seams for the slider drag guards
     void setSliderDragging(boolean dragging) {
         sliderDragging = dragging;
     }
@@ -1149,7 +1136,6 @@ public class ReaderActivity extends AppCompatActivity {
         return currentPage;
     }
 
-    /** Turns one page exactly as the edge tap does; used to walk through a chapter. */
     void turnPageForwardForTest() {
         turnPage(1);
     }

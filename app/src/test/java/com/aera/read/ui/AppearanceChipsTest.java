@@ -54,7 +54,7 @@ public class AppearanceChipsTest {
         prefs = new ReaderPrefs(app);
         prefs.font = Fonts.SYSTEM;
         prefs.viewMode = "pages";
-        prefs.theme = "paper";
+        prefs.theme = "light";
         prefs.save();
         relayout = false;
     }

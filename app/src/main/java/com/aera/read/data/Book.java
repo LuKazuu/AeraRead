@@ -4,7 +4,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /** A document in the library. The book file always stays where the user keeps it. */
-public class Book {
+public final class Book {
     public static final String TYPE_EPUB = "epub";
     public static final String TYPE_PDF = "pdf";
 
@@ -18,10 +18,10 @@ public class Book {
     /** Small cached thumbnail produced during the folder scan (not a copy of the book). */
     public String coverFile = "";
     /** Last reading position: chapter index + character offset (+ fraction within the anchored page). */
-    public int chapter = 0;
-    public int offset = 0;
-    public float fraction = 0f;
-    public float progress = 0f;
+    public int chapter;
+    public int offset;
+    public float fraction;
+    public float progress;
     /** Typography + viewport the position was captured with; lets resume restore exactly. */
     public String layoutKey = "";
 
@@ -31,6 +31,24 @@ public class Book {
 
     public boolean isPdf() {
         return TYPE_PDF.equals(type);
+    }
+
+    public Book copy() {
+        Book b = new Book();
+        b.uri = uri;
+        b.title = title;
+        b.author = author;
+        b.type = type;
+        b.size = size;
+        b.lastModified = lastModified;
+        b.addedAt = addedAt;
+        b.coverFile = coverFile;
+        b.chapter = chapter;
+        b.offset = offset;
+        b.fraction = fraction;
+        b.progress = progress;
+        b.layoutKey = layoutKey;
+        return b;
     }
 
     public JSONObject toJson() {

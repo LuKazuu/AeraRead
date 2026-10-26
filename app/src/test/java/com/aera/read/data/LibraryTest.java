@@ -130,7 +130,7 @@ public class LibraryTest {
         fresh.font = "lora";
         fresh.sizeSp = 18;
         fresh.linePct = 155;
-        fresh.theme = "paper";
+        fresh.theme = "light";
         fresh.viewMode = "pages";
         fresh.direction = "ltr";
         fresh.keepScreenOn = false;
@@ -140,10 +140,10 @@ public class LibraryTest {
     @Test
     public void themesAreDistinctAndDarkFlagged() {
         assertEquals(ReaderTheme.SEPIA, ReaderTheme.from("sepia"));
-        assertEquals(ReaderTheme.PAPER, ReaderTheme.from("unknown"));
+        assertEquals(ReaderTheme.LIGHT, ReaderTheme.from("unknown"));
         assertTrue(ReaderTheme.NIGHT.dark);
         assertTrue(ReaderTheme.SLATE.dark);
-        assertFalse(ReaderTheme.PAPER.dark);
+        assertFalse(ReaderTheme.LIGHT.dark);
         assertFalse(ReaderTheme.SEPIA.dark);
     }
 }

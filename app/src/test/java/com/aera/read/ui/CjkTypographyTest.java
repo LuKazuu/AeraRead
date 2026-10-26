@@ -224,7 +224,7 @@ public class CjkTypographyTest {
             p.sizeSp = 16;
             p.linePct = 130;
             p.viewMode = mode;
-            p.theme = "paper";
+            p.theme = "light";
             p.save();
 
             Book book = TestSupport.installFile(app,

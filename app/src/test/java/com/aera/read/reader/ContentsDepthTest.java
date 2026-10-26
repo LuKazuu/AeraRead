@@ -79,7 +79,7 @@ public class ContentsDepthTest {
         EpubSession session = EpubSession.open(app, book);
         try {
             session.layout(new com.aera.read.data.ReaderPrefs(app),
-                    com.aera.read.data.ReaderTheme.from("paper"), 900, 1500);
+                    com.aera.read.data.ReaderTheme.from("light"), 900, 1500);
             List<EpubBook.TocEntry> rows = session.contents();
             assertFalse("the book really has a nested entry", rows.isEmpty());
             assertTrue("chapters are listed", rows.size() > 10);

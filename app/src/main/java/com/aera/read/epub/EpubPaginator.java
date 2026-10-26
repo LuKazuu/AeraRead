@@ -12,7 +12,7 @@ import android.text.style.LineHeightSpan;
 
 import java.util.List;
 
-/** Splits chapters into pages at the given content size. Pure text measurement. */
+/** Splits chapters into pages at the given content size. Pure text + inline-object measurement. */
 public final class EpubPaginator {
 
     private EpubPaginator() {
@@ -63,7 +63,7 @@ public final class EpubPaginator {
                 if (imgH > height) imgH = height;
                 int h = Math.round(imgH);
                 if (hasContent && y + h > height) {
-                    closePage(cur, ch, block.charStart);
+                    closePage(cur, block.charStart);
                     pages.add(cur);
                     cur = new PagedBook.Page();
                     y = 0;
@@ -89,8 +89,8 @@ public final class EpubPaginator {
 
             int gapAfter = Math.round(st.gapAfter(block.style));
             int gapBefore = firstBlock ? 0 : Math.round(st.gapBefore(block.style));
-            if (hasContent && gapBefore > 0) {
-                if (y + gapBefore < height) y += gapBefore;
+            if (hasContent && gapBefore > 0 && y + gapBefore < height) {
+                y += gapBefore;
             }
             firstBlock = false;
 
@@ -109,7 +109,7 @@ public final class EpubPaginator {
                     if (!hasContent) {
                         fit = 1; // single-line taller than page: keep it to guarantee progress
                     } else {
-                        closePage(cur, ch, block.charStart + layout.getLineStart(line));
+                        closePage(cur, block.charStart + layout.getLineStart(line));
                         pages.add(cur);
                         cur = new PagedBook.Page();
                         y = 0;
@@ -132,7 +132,7 @@ public final class EpubPaginator {
                 y += seg.height + (line + fit == lineCount ? gapAfter : 0);
                 line += fit;
                 if (line < lineCount) {
-                    closePage(cur, ch, block.charStart + layout.getLineStart(line));
+                    closePage(cur, block.charStart + layout.getLineStart(line));
                     pages.add(cur);
                     cur = new PagedBook.Page();
                     y = 0;
@@ -142,7 +142,7 @@ public final class EpubPaginator {
         }
 
         if (hasContent) {
-            closePage(cur, ch, ch.charCount);
+            closePage(cur, ch.charCount);
             pages.add(cur);
         }
         if (pages.isEmpty()) {
@@ -151,7 +151,6 @@ public final class EpubPaginator {
             p.endOffset = ch.charCount;
             pages.add(p);
         } else {
-            // Make offsets contiguous so position lookups are unambiguous.
             for (int i = 0; i < pages.size() - 1; i++) {
                 pages.get(i).endOffset = pages.get(i + 1).startOffset;
             }
@@ -160,23 +159,39 @@ public final class EpubPaginator {
         return cp;
     }
 
-    private static void closePage(PagedBook.Page page, EpubBook.Chapter ch, int endOffset) {
+    private static void closePage(PagedBook.Page page, int endOffset) {
         page.endOffset = endOffset;
         if (page.segments.isEmpty()) page.startOffset = Math.min(page.startOffset, endOffset);
     }
 
-    @SuppressLint("WrongConstant") // Layout.BREAK_STRATEGY_* and LineBreaker.BREAK_STRATEGY_* are identical
+    @SuppressLint("WrongConstant")
     private static StaticLayout build(EpubBook.Block block, TextStyles st, SpanSet spans,
                                       int width) {
-        // Share the four style TextPaints directly rather than cloning a native Paint per block:
-        // saves thousands of JNI allocations and lets PageView recolor text on the hardware
-        // Canvas with zero offscreen saveLayer buffers.
         TextPaint paint = st.paintFor(block.style);
         boolean heading = st.isHeading(block.style);
         int avail = Math.max(60, width - Math.round(st.indentFor(block.style)));
         SpannableString ss = new SpannableString(block.text);
+        int len = ss.length();
+
+        if (block.spans != null) {
+            for (EpubBook.InlineSpan s : block.spans) {
+                if (s.start >= 0 && s.start < s.end && s.end <= len && s.mask != 0) {
+                    ss.setSpan(new InlineStyleSpan(st, block.style, s.mask),
+                            s.start, s.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+        }
+        if (block.inlineImages != null) {
+            Paint.FontMetricsInt fm = paint.getFontMetricsInt();
+            float textSize = paint.getTextSize();
+            for (EpubBook.InlineImage img : block.inlineImages) {
+                if (img.pos >= 0 && img.pos + 1 <= len) {
+                    ss.setSpan(new InlineImageSpan(img, textSize, fm.ascent, fm.descent, avail),
+                            img.pos, img.pos + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+        }
         if (block.rubies != null) {
-            int len = ss.length();
             for (EpubBook.Ruby r : block.rubies) {
                 if (r.start >= 0 && r.start < r.end && r.end <= len) {
                     ss.setSpan(new RubySpan(r.text, avail), r.start, r.end,
@@ -184,18 +199,29 @@ public final class EpubPaginator {
                 }
             }
         }
-        ss.setSpan(spans.lineHeightFor(block.style), 0, ss.length(),
+        ExactLineHeightSpan lh = spans.lineHeightFor(block.style);
+        boolean hasExtraVertical = block.rubies != null || block.inlineImages != null
+                || hasShiftedScript(block.spans);
+        ss.setSpan(hasExtraVertical ? lh.withVerticalSpans() : lh, 0, len,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         if (block.style == EpubBook.Block.STYLE_LIST) {
-            ss.setSpan(spans.bullet, 0, ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ss.setSpan(spans.bullet, 0, len, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
-        return StaticLayout.Builder.obtain(ss, 0, ss.length(), paint, avail)
+        return StaticLayout.Builder.obtain(ss, 0, len, paint, avail)
                 .setIncludePad(false)
                 .setLineSpacing(0f, 1f)
                 .setAlignment(heading ? Layout.Alignment.ALIGN_CENTER : Layout.Alignment.ALIGN_NORMAL)
                 .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
                 .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                 .build();
+    }
+
+    private static boolean hasShiftedScript(List<EpubBook.InlineSpan> spans) {
+        if (spans == null) return false;
+        for (EpubBook.InlineSpan s : spans) {
+            if ((s.mask & (EpubBook.InlineSpan.SUP | EpubBook.InlineSpan.SUB)) != 0) return true;
+        }
+        return false;
     }
 
     private static final class SpanSet {
@@ -206,10 +232,10 @@ public final class EpubPaginator {
         final BulletSpan bullet;
 
         SpanSet(TextStyles st) {
-            body = new ExactLineHeightSpan(st.body, st.lineBoxPx(st.body));
-            h1 = new ExactLineHeightSpan(st.h1, st.lineBoxPx(st.h1));
-            h2 = new ExactLineHeightSpan(st.h2, st.lineBoxPx(st.h2));
-            quote = new ExactLineHeightSpan(st.quote, st.lineBoxPx(st.quote));
+            body = new ExactLineHeightSpan(st.body, st.lineBoxPx(st.body), false);
+            h1 = new ExactLineHeightSpan(st.h1, st.lineBoxPx(st.h1), false);
+            h2 = new ExactLineHeightSpan(st.h2, st.lineBoxPx(st.h2), false);
+            quote = new ExactLineHeightSpan(st.quote, st.lineBoxPx(st.quote), false);
             bullet = new BulletSpan(Math.max(8, Math.round(st.listIndent)));
         }
 
@@ -228,61 +254,80 @@ public final class EpubPaginator {
     }
 
     /**
-     * Enforces the target line box on every line — including single-line paragraphs, last
-     * lines, and lines expanded by CJK fallback fonts — while preserving full vertical
-     * clearance whenever a line carries ruby annotations.
+     * Enforces the target line box on every line while guaranteeing full vertical clearance
+     * for ruby annotations, inline images/gaiji, and superscript/subscript runs.
+     * Plain paragraphs skip {@code Spanned.getSpans} entirely on the hot pagination path.
      */
     private static final class ExactLineHeightSpan implements LineHeightSpan {
         private final TextPaint basePaint;
         private final int target;
         private final int baseAscent;
         private final int baseDescent;
+        private final boolean checkVerticalSpans;
+        private ExactLineHeightSpan verticalVariant;
 
-        ExactLineHeightSpan(TextPaint paint, int target) {
+        ExactLineHeightSpan(TextPaint paint, int target, boolean checkVerticalSpans) {
             this.basePaint = paint;
             this.target = target;
             Paint.FontMetricsInt fm = paint.getFontMetricsInt();
             this.baseAscent = fm.ascent;
             this.baseDescent = fm.descent;
+            this.checkVerticalSpans = checkVerticalSpans;
+        }
+
+        ExactLineHeightSpan withVerticalSpans() {
+            if (checkVerticalSpans) return this;
+            if (verticalVariant == null) {
+                verticalVariant = new ExactLineHeightSpan(basePaint, target, true);
+            }
+            return verticalVariant;
         }
 
         @Override
         public void chooseHeight(CharSequence text, int start, int end,
                                  int spanstartv, int lineHeight, Paint.FontMetricsInt fm) {
-            RubySpan[] rubies = text instanceof Spanned
-                    ? ((Spanned) text).getSpans(start, end, RubySpan.class) : null;
-            if (rubies == null || rubies.length == 0) {
-                int origin = fm.descent - fm.ascent;
-                if (origin <= 0) return;
-                int delta = target - origin;
-                int half = delta / 2;
-                fm.ascent -= delta - half;
-                fm.descent += half;
-                fm.top = Math.min(fm.top, fm.ascent);
-                fm.bottom = Math.max(fm.bottom, fm.descent);
+            if (!checkVerticalSpans || !(text instanceof Spanned)) {
+                applyNominal(fm);
                 return;
             }
 
-            boolean activeRuby = false;
-            int minRubyAscent = Integer.MAX_VALUE;
             Spanned spanned = (Spanned) text;
+            boolean expanded = false;
+            int minAscent = Integer.MAX_VALUE;
+            int maxDescent = Integer.MIN_VALUE;
+
+            RubySpan[] rubies = spanned.getSpans(start, end, RubySpan.class);
             for (RubySpan ruby : rubies) {
-                int rs = Math.max(start, spanned.getSpanStart(ruby));
-                int re = Math.min(end, spanned.getSpanEnd(ruby));
-                if (rs < re) {
-                    activeRuby = true;
-                        minRubyAscent = Math.min(minRubyAscent, ruby.requiredAscent(basePaint));
+                if (Math.max(start, spanned.getSpanStart(ruby))
+                        < Math.min(end, spanned.getSpanEnd(ruby))) {
+                    expanded = true;
+                    minAscent = Math.min(minAscent, ruby.requiredAscent(basePaint));
                 }
             }
-            if (!activeRuby) {
-                int origin = fm.descent - fm.ascent;
-                if (origin <= 0) return;
-                int delta = target - origin;
-                int half = delta / 2;
-                fm.ascent -= delta - half;
-                fm.descent += half;
-                fm.top = Math.min(fm.top, fm.ascent);
-                fm.bottom = Math.max(fm.bottom, fm.descent);
+
+            InlineImageSpan[] imgs = spanned.getSpans(start, end, InlineImageSpan.class);
+            for (InlineImageSpan img : imgs) {
+                if (Math.max(start, spanned.getSpanStart(img))
+                        < Math.min(end, spanned.getSpanEnd(img))) {
+                    expanded = true;
+                    minAscent = Math.min(minAscent, img.requiredAscent());
+                    maxDescent = Math.max(maxDescent, img.requiredDescent());
+                }
+            }
+
+            InlineStyleSpan[] styles = spanned.getSpans(start, end, InlineStyleSpan.class);
+            for (InlineStyleSpan st : styles) {
+                if (st.hasVerticalShift()
+                        && Math.max(start, spanned.getSpanStart(st))
+                        < Math.min(end, spanned.getSpanEnd(st))) {
+                    expanded = true;
+                    minAscent = Math.min(minAscent, st.requiredAscent(basePaint));
+                    maxDescent = Math.max(maxDescent, st.requiredDescent(basePaint));
+                }
+            }
+
+            if (!expanded) {
+                applyNominal(fm);
                 return;
             }
 
@@ -291,8 +336,19 @@ public final class EpubPaginator {
             int half = delta / 2;
             int normalAscent = baseAscent - (delta - half);
             int normalDescent = baseDescent + half;
-            fm.ascent = Math.min(normalAscent, minRubyAscent);
-            fm.descent = Math.max(fm.descent, normalDescent);
+            fm.ascent = Math.min(normalAscent, minAscent);
+            fm.descent = Math.max(Math.max(fm.descent, normalDescent), maxDescent);
+            fm.top = Math.min(fm.top, fm.ascent);
+            fm.bottom = Math.max(fm.bottom, fm.descent);
+        }
+
+        private void applyNominal(Paint.FontMetricsInt fm) {
+            int origin = fm.descent - fm.ascent;
+            if (origin <= 0) return;
+            int delta = target - origin;
+            int half = delta / 2;
+            fm.ascent -= delta - half;
+            fm.descent += half;
             fm.top = Math.min(fm.top, fm.ascent);
             fm.bottom = Math.max(fm.bottom, fm.descent);
         }

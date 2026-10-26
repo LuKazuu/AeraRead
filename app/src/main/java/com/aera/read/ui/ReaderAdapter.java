@@ -24,6 +24,10 @@ public class ReaderAdapter extends RecyclerView.Adapter<ReaderAdapter.Holder> {
         this.pageCount = session.pageCount();
     }
 
+    int itemHeightPx() {
+        return itemHeight;
+    }
+
     /**
      * Re-pagination changes how many pages exist. A plain "range changed" while the count
      * moves leaves RecyclerView with stale positions and makes it throw, so a new count is
@@ -38,9 +42,11 @@ public class ReaderAdapter extends RecyclerView.Adapter<ReaderAdapter.Holder> {
     @Override
     public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View item = session.createItemView(parent, scrollMode);
+        int heightParam = !scrollMode
+                ? ViewGroup.LayoutParams.MATCH_PARENT
+                : (session.supportsTypography() ? itemHeight : ViewGroup.LayoutParams.WRAP_CONTENT);
         item.setLayoutParams(new RecyclerView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                scrollMode ? itemHeight : ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, heightParam));
         return new Holder(item);
     }
 

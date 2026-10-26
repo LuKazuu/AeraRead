@@ -95,7 +95,7 @@ public class PerformanceAndStabilityTest {
 
         for (int round = 0; round < 15; round++) {
             PdfSession session = PdfSession.open(app, book);
-            session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+            session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
             FrameLayout parent = new FrameLayout(app);
             ZoomImageView view = (ZoomImageView) session.createItemView(parent, false);
             view.layout(0, 0, 822, 1700);
@@ -234,7 +234,7 @@ public class PerformanceAndStabilityTest {
 
         PdfSession session = PdfSession.open(app, book);
         try {
-            session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+            session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
             FrameLayout parent = new FrameLayout(app);
             ZoomImageView singleRecycledCard = (ZoomImageView) session.createItemView(parent, false);
             singleRecycledCard.layout(0, 0, 822, 1700);
@@ -261,7 +261,7 @@ public class PerformanceAndStabilityTest {
         Book book = TestSupport.install(app, "alice.epub");
         for (int round = 0; round < 12; round++) {
             EpubSession session = EpubSession.open(app, book);
-            session.layout(new ReaderPrefs(app), ReaderTheme.PAPER, 822, 1782);
+            session.layout(new ReaderPrefs(app), ReaderTheme.LIGHT, 822, 1782);
             FrameLayout parent = new FrameLayout(app);
             View item = session.createItemView(parent, false);
             item.measure(View.MeasureSpec.makeMeasureSpec(822, View.MeasureSpec.EXACTLY),

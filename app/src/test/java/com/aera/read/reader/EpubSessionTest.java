@@ -49,7 +49,7 @@ public class EpubSessionTest {
         book = TestSupport.install(app, "meditations.epub");
         prefs = new ReaderPrefs(app);
         session = EpubSession.open(app, book);
-        session.layout(prefs, ReaderTheme.PAPER, WIDTH, HEIGHT);
+        session.layout(prefs, ReaderTheme.LIGHT, WIDTH, HEIGHT);
     }
 
     @After
@@ -183,7 +183,7 @@ public class EpubSessionTest {
         bigger.linePct = 168;
         EpubSession reopened = EpubSession.open(app, book);
         try {
-            reopened.layout(bigger, ReaderTheme.PAPER, WIDTH, HEIGHT);
+            reopened.layout(bigger, ReaderTheme.LIGHT, WIDTH, HEIGHT);
             int resumed = reopened.initialPage();
             com.aera.read.epub.PagedBook.Page p = reopened.paged().page(resumed);
             assertEquals("same chapter", savedChapter, p.chapter);

@@ -140,7 +140,7 @@ public class ZoomSmoothnessTest {
         paged.styles = com.aera.read.epub.TextStyles.create(app, new ReaderPrefs(app));
 
         PageView view = new PageView(app, true);
-        view.setData(paged, page, ReaderTheme.PAPER, images);
+        view.setData(paged, page, ReaderTheme.LIGHT, images);
         view.measure(android.view.View.MeasureSpec.makeMeasureSpec(822,
                         android.view.View.MeasureSpec.EXACTLY),
                 android.view.View.MeasureSpec.makeMeasureSpec(1400,

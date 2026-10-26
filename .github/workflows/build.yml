@@ -15,7 +15,7 @@ on:
         description: 'Release tag (used when Build target is Release)'
         required: false
         type: string
-        default: 'v1.0'
+        default: 'v1.1'
 
 permissions:
   contents: write
@@ -27,14 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android 17 SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
 
       - name: Compile R8-optimized APK
         run: |
@@ -45,21 +50,21 @@ jobs:
         run: |
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
           AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n 1)
-          "$APKSIGNER" verify --print-certs AeraRead-1.0.apk
-          BADGING=$("$AAPT2" dump badging AeraRead-1.0.apk)
+          "$APKSIGNER" verify --print-certs AeraRead-1.1.apk
+          BADGING=$("$AAPT2" dump badging AeraRead-1.1.apk)
           echo "$BADGING" | grep "^package:"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AeraRead-1.0
-          path: AeraRead-1.0.apk
+          name: AeraRead-1.1
+          path: AeraRead-1.1.apk
 
       - name: Tag and publish GitHub Release
         if: inputs.mode == 'Release'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || 'v1.0' }}
-          name: Aera Read ${{ inputs.tag || 'v1.0' }}
+          tag_name: ${{ inputs.tag || 'v1.1' }}
+          name: Aera Read ${{ inputs.tag || 'v1.1' }}
           generate_release_notes: true
-          files: AeraRead-1.0.apk
+          files: AeraRead-1.1.apk

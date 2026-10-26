@@ -15,6 +15,9 @@ public interface PdfPageSource extends Closeable {
 
     Bitmap render(int page, int targetWidth) throws IOException;
 
+    default void setTrimMode(String trimMode) {
+    }
+
     interface Factory {
         PdfPageSource open(Context context, Book book) throws IOException;
     }

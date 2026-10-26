@@ -168,8 +168,9 @@ public final class ZipArchive implements Closeable {
 
         @Override
         public int read(byte[] b, int off, int len) throws IOException {
-            if (remaining <= 0) return -1;
+            if (len == 0) return 0;
             if (bufferPos >= bufferLen) {
+                if (remaining <= 0) return -1;
                 int want = (int) Math.min(buffer.length, remaining);
                 int n = source.readAt(position, buffer, 0, want);
                 if (n <= 0) return -1;
@@ -360,6 +361,7 @@ public final class ZipArchive implements Closeable {
     /** Inflates a raw deflate stream and releases native resources on close. */
     private static final class RawInflateStream extends InflaterInputStream {
         private final Inflater inflaterRef;
+        private boolean eofPadded;
 
         RawInflateStream(InputStream in) {
             this(in, new Inflater(true));
@@ -368,6 +370,23 @@ public final class ZipArchive implements Closeable {
         private RawInflateStream(InputStream in, Inflater inflater) {
             super(in, inflater, 32 * 1024);
             this.inflaterRef = inflater;
+        }
+
+        @Override
+        protected void fill() throws IOException {
+            if (closedStream()) throw new IOException("Stream closed");
+            len = in.read(buf, 0, buf.length);
+            if (len == -1) {
+                if (eofPadded) throw new EOFException("Unexpected end of ZLIB input stream");
+                eofPadded = true;
+                buf[0] = 0;
+                len = 1;
+            }
+            inf.setInput(buf, 0, len);
+        }
+
+        private boolean closedStream() {
+            return in == null;
         }
 
         @Override

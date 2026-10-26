@@ -20,6 +20,13 @@
     <string name="no_bookmarks">No bookmarks yet.</string>
     <string name="appearance">Appearance</string>
     <string name="theme">Theme</string>
+    <string name="pdf_theme_apply">Apply theme to</string>
+    <string name="pdf_theme_full">Full page</string>
+    <string name="pdf_theme_background">Background</string>
+    <string name="pdf_margin_trim">Margin trim</string>
+    <string name="pdf_trim_off">Off</string>
+    <string name="pdf_trim_normal">Normal</string>
+    <string name="pdf_trim_max">Max</string>
     <string name="font">Font</string>
     <string name="manage">Manage</string>
     <string name="size">Size</string>
@@ -49,7 +56,6 @@
     <string name="scan_result">%1$d found · %2$d new</string>
     <string name="scan_failed">%1$d could not be opened</string>
     <string name="book_meta">%1$s · %2$s</string>
-    <string name="appearance_pdf_note">Text settings don’t apply to PDFs.</string>
     <string name="fonts">Fonts</string>
     <string name="fonts_note">Downloaded once, then work offline.</string>
     <string name="fonts_latin">Latin</string>

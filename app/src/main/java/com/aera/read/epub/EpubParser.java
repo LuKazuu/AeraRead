@@ -1,6 +1,7 @@
 package com.aera.read.epub;
 
 import android.graphics.BitmapFactory;
+import android.util.Base64;
 
 import com.aera.read.io.ZipArchive;
 
@@ -12,6 +13,7 @@ import org.jsoup.nodes.TextNode;
 import org.jsoup.parser.Parser;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -21,13 +23,18 @@ import java.util.Map;
 
 /**
  * EPUB 2/3 parser. Flattens each spine document into styled text blocks with exact character
- * offsets, so reading positions survive pagination changes. Reads through {@link ZipArchive},
- * which works on any seekable source (including a content-provider file descriptor).
+ * offsets, inline formatting spans, ruby annotations, inline images/gaiji, and standalone
+ * illustrations in a single DOM pass.
  */
 public final class EpubParser {
 
+    static final char OBJECT_REPLACEMENT = '\uFFFC';
+    private static final int LARGE_BLOCK_IMAGE_PX = 420;
+
     private final ZipArchive zip;
     private Map<String, String[]> items = new HashMap<>();
+    private final Map<String, EpubCss> sheetCache = new HashMap<>();
+    private final Map<String, int[]> boundsCache = new HashMap<>();
 
     public EpubParser(ZipArchive zip) {
         this.zip = zip;
@@ -84,10 +91,12 @@ public final class EpubParser {
                 continue;
             }
             Document doc = Jsoup.parse(html);
+            String baseDir = dirOf(path);
+            EpubCss css = loadChapterCss(doc, baseDir);
             EpubBook.Chapter chapter = new EpubBook.Chapter();
             chapter.index = book.chapters.size();
             chapter.path = path;
-            if (doc.body() != null) walk(doc.body(), dirOf(path), chapter.blocks);
+            if (doc.body() != null) walk(doc.body(), baseDir, css, chapter.blocks);
             assignOffsets(chapter);
             book.chapters.add(chapter);
         }
@@ -96,9 +105,6 @@ public final class EpubParser {
         book.toc.addAll(parseNav(book));
         if (book.toc.isEmpty()) book.toc.addAll(parseNcx(book));
 
-        // Chapter names come from the table of contents only. When a book ships no
-        // contents we show none rather than inventing "Section N" labels that do not
-        // match what the reader sees on the page.
         Map<Integer, String> tocTitles = new HashMap<>();
         for (EpubBook.TocEntry t : book.toc) {
             if (!tocTitles.containsKey(t.chapter) && !t.title.isEmpty()) {
@@ -111,6 +117,49 @@ public final class EpubParser {
             chapter.title = title == null ? "" : title;
         }
         return book;
+    }
+
+    private EpubCss loadChapterCss(Document doc, String baseDir) {
+        EpubCss combined = null;
+        for (Element el : doc.select("link,style")) {
+            String tag = el.normalName();
+            if ("link".equals(tag)) {
+                String rel = el.attr("rel").toLowerCase(Locale.ROOT);
+                String type = el.attr("type").toLowerCase(Locale.ROOT);
+                String href = el.attr("href").trim();
+                if (href.isEmpty()) continue;
+                if (!rel.contains("stylesheet") && !type.contains("css")
+                        && !href.toLowerCase(Locale.ROOT).endsWith(".css")) {
+                    continue;
+                }
+                int hash = href.indexOf('#');
+                if (hash >= 0) href = href.substring(0, hash);
+                String cssPath = normalize(baseDir + href);
+                EpubCss cached = sheetCache.get(cssPath);
+                if (cached == null) {
+                    cached = EpubCss.EMPTY;
+                    try {
+                        byte[] raw = zip.read(cssPath);
+                        if (raw != null) {
+                            cached = EpubCss.parseSheet(new String(raw, StandardCharsets.UTF_8));
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    sheetCache.put(cssPath, cached);
+                }
+                if (!cached.isEmpty()) {
+                    if (combined == null) combined = new EpubCss();
+                    combined.addSheet(cached);
+                }
+            } else if ("style".equals(tag)) {
+                EpubCss inl = EpubCss.parseSheet(el.data());
+                if (!inl.isEmpty()) {
+                    if (combined == null) combined = new EpubCss();
+                    combined.addSheet(inl);
+                }
+            }
+        }
+        return combined == null ? EpubCss.EMPTY : combined;
     }
 
     // ------------------------------------------------------------------ package
@@ -196,12 +245,17 @@ public final class EpubParser {
     private String firstHeading(EpubBook.Chapter chapter) {
         for (EpubBook.Block b : chapter.blocks) {
             if (b.type == EpubBook.Block.TEXT
-                    && (b.style == EpubBook.Block.STYLE_H1 || b.style == EpubBook.Block.STYLE_H2)
-                    && !b.text.isEmpty()) {
-                return b.text;
+                    && (b.style == EpubBook.Block.STYLE_H1 || b.style == EpubBook.Block.STYLE_H2)) {
+                String clean = stripPlaceholders(b.text);
+                if (!clean.isEmpty()) return clean;
             }
         }
         return "";
+    }
+
+    private static String stripPlaceholders(String s) {
+        if (s == null || s.indexOf(OBJECT_REPLACEMENT) < 0) return s == null ? "" : s;
+        return norm(s.replace(OBJECT_REPLACEMENT, ' '));
     }
 
     // ------------------------------------------------------------------ toc
@@ -325,7 +379,23 @@ public final class EpubParser {
     private static final class InlineBuf {
         final StringBuilder sb = new StringBuilder();
         final List<EpubBook.Ruby> rubies = new ArrayList<>();
+        final List<EpubBook.InlineSpan> spans = new ArrayList<>();
+        final List<EpubBook.InlineImage> images = new ArrayList<>();
         boolean trailingLineBreakSpace;
+        boolean lastPlaceholderAfterEastAsian;
+
+        void recordSpan(int start, int end, int mask) {
+            if (mask == 0 || start >= end) return;
+            int n = spans.size();
+            if (n > 0) {
+                EpubBook.InlineSpan last = spans.get(n - 1);
+                if (last.end == start && last.mask == mask) {
+                    spans.set(n - 1, new EpubBook.InlineSpan(last.start, end, mask));
+                    return;
+                }
+            }
+            spans.add(new EpubBook.InlineSpan(start, end, mask));
+        }
 
         void flush(int style, List<EpubBook.Block> out) {
             int n = sb.length();
@@ -334,84 +404,151 @@ public final class EpubParser {
             while (start < end && sb.charAt(start) <= ' ') start++;
             while (end > start && sb.charAt(end - 1) <= ' ') end--;
             if (start < end) {
-                String text = sb.substring(start, end);
-                int len = text.length();
-                List<EpubBook.Ruby> shifted = null;
-                if (!rubies.isEmpty()) {
-                    shifted = new ArrayList<>(rubies.size());
-                    for (EpubBook.Ruby r : rubies) {
-                        int rs = r.start - start;
-                        int re = r.end - start;
-                        if (rs < 0) rs = 0;
-                        if (re > len) re = len;
-                        if (rs < re && !r.text.isEmpty()) {
-                            shifted.add(new EpubBook.Ruby(rs, re, r.text));
+                if (!images.isEmpty() && !hasNonImageText(sb, start, end)) {
+                    // Paragraph contains ONLY image(s) with no surrounding text -> standalone
+                    // block illustration(s) so figures/covers render full-width & zoomable.
+                    for (EpubBook.InlineImage img : images) {
+                        if (img.pos >= start && img.pos < end) {
+                            out.add(EpubBook.Block.image(img.path, img.imgW, img.imgH));
                         }
                     }
+                } else {
+                    String text = sb.substring(start, end);
+                    int len = text.length();
+
+                    List<EpubBook.Ruby> shiftedRubies = null;
+                    if (!rubies.isEmpty()) {
+                        shiftedRubies = new ArrayList<>(rubies.size());
+                        for (EpubBook.Ruby r : rubies) {
+                            int rs = Math.max(0, r.start - start);
+                            int re = Math.min(len, r.end - start);
+                            if (rs < re && !r.text.isEmpty()) {
+                                shiftedRubies.add(new EpubBook.Ruby(rs, re, r.text));
+                            }
+                        }
+                    }
+
+                    List<EpubBook.InlineSpan> shiftedSpans = null;
+                    if (!spans.isEmpty()) {
+                        shiftedSpans = new ArrayList<>(spans.size());
+                        for (EpubBook.InlineSpan s : spans) {
+                            int ss = Math.max(0, s.start - start);
+                            int se = Math.min(len, s.end - start);
+                            if (ss < se && s.mask != 0) {
+                                shiftedSpans.add(new EpubBook.InlineSpan(ss, se, s.mask));
+                            }
+                        }
+                    }
+
+                    List<EpubBook.InlineImage> shiftedImages = null;
+                    if (!images.isEmpty()) {
+                        shiftedImages = new ArrayList<>(images.size());
+                        for (EpubBook.InlineImage img : images) {
+                            int p = img.pos - start;
+                            if (p >= 0 && p < len && text.charAt(p) == OBJECT_REPLACEMENT) {
+                                shiftedImages.add(new EpubBook.InlineImage(
+                                        p, img.path, img.imgW, img.imgH,
+                                        img.emW, img.emH, img.pxW, img.pxH));
+                            }
+                        }
+                    }
+
+                    out.add(EpubBook.Block.richText(
+                            text, style, shiftedRubies, shiftedSpans, shiftedImages));
                 }
-                out.add(EpubBook.Block.text(text, style, shifted));
             }
             sb.setLength(0);
             rubies.clear();
+            spans.clear();
+            images.clear();
             trailingLineBreakSpace = false;
+            lastPlaceholderAfterEastAsian = false;
+        }
+
+        private static boolean hasNonImageText(StringBuilder sb, int start, int end) {
+            for (int i = start; i < end; i++) {
+                char c = sb.charAt(i);
+                if (c > ' ' && c != OBJECT_REPLACEMENT) return true;
+            }
+            return false;
         }
     }
 
-    private void walk(Element parent, String baseDir, List<EpubBook.Block> out) {
+    private void walk(Element parent, String baseDir, EpubCss css, List<EpubBook.Block> out) {
         InlineBuf inline = new InlineBuf();
         for (Node node : parent.childNodes()) {
             if (node instanceof TextNode) {
                 appendText(inline, ((TextNode) node).getWholeText(),
-                        EpubBook.Block.STYLE_BODY, out);
+                        EpubBook.Block.STYLE_BODY, 0, out);
                 continue;
             }
             if (!(node instanceof Element)) continue;
             Element child = (Element) node;
             String tag = child.normalName();
-            if (isSkippedTag(tag) || isHidden(child)) continue;
+            if (isSkippedTag(tag)) continue;
+            EpubCss.Decl decl = css.resolve(child);
+            if (isHidden(child, decl)) continue;
 
             if (tag.equals("br")) {
                 inline.flush(EpubBook.Block.STYLE_BODY, out);
                 continue;
             }
             if (isImageEl(child)) {
-                inline.flush(EpubBook.Block.STYLE_BODY, out);
-                addImage(child, baseDir, out);
+                appendImage(child, decl, baseDir, inline, EpubBook.Block.STYLE_BODY, 0, out);
                 continue;
             }
             if (tag.equals("svg")) {
-                inline.flush(EpubBook.Block.STYLE_BODY, out);
-                walk(child, baseDir, out);
+                Element svgImg = singleSvgImage(child);
+                if (svgImg != null) {
+                    appendImage(svgImg, decl, baseDir, inline, EpubBook.Block.STYLE_BODY, 0, out);
+                } else {
+                    inline.flush(EpubBook.Block.STYLE_BODY, out);
+                    walk(child, baseDir, css, out);
+                }
                 continue;
             }
             if (isTextBlock(tag)) {
                 inline.flush(EpubBook.Block.STYLE_BODY, out);
-                emitTextBlocks(child, styleFor(tag), out);
-                if (hasImages(child)) walkImages(child, baseDir, out);
+                int bStyle = styleFor(tag);
+                int initMask = tagInlineMask(tag);
+                initMask = mergeInlineMask(initMask, decl);
+                emitTextBlocks(child, baseDir, css, bStyle, initMask, out);
                 continue;
             }
             if (tag.equals("blockquote") || tag.equals("figure")) {
                 inline.flush(EpubBook.Block.STYLE_BODY, out);
                 if (hasNestedBlocks(child)) {
-                    walk(child, baseDir, out);
+                    walk(child, baseDir, css, out);
                 } else {
-                    emitTextBlocks(child, EpubBook.Block.STYLE_QUOTE, out);
-                    if (hasImages(child)) walkImages(child, baseDir, out);
+                    int initMask = mergeInlineMask(0, decl);
+                    emitTextBlocks(child, baseDir, css, EpubBook.Block.STYLE_QUOTE, initMask, out);
                 }
                 continue;
             }
-            if (isBlockContainer(tag)) {
+            if (isBlockContainer(tag) || (decl != null && decl.display == EpubCss.DISPLAY_BLOCK)) {
                 inline.flush(EpubBook.Block.STYLE_BODY, out);
-                walk(child, baseDir, out);
+                walk(child, baseDir, css, out);
                 continue;
             }
-            collectInline(child, inline, EpubBook.Block.STYLE_BODY, out);
-            if (hasImages(child)) {
-                inline.flush(EpubBook.Block.STYLE_BODY, out);
-                walkImages(child, baseDir, out);
-            }
+            int childMask = mergeInlineMask(tagInlineMask(tag), decl);
+            collectInline(child, baseDir, css, inline, EpubBook.Block.STYLE_BODY, childMask, out);
         }
         inline.flush(EpubBook.Block.STYLE_BODY, out);
+    }
+
+    private static Element singleSvgImage(Element svg) {
+        Element found = null;
+        for (Element el : svg.getAllElements()) {
+            if (el == svg) continue;
+            String n = el.normalName();
+            if ("image".equals(n) || "img".equals(n)) {
+                if (found != null) return null;
+                found = el;
+            } else if ("text".equals(n)) {
+                return null;
+            }
+        }
+        return found;
     }
 
     private static boolean hasNestedBlocks(Element el) {
@@ -425,66 +562,208 @@ public final class EpubParser {
         return false;
     }
 
-    private void walkImages(Element parent, String baseDir, List<EpubBook.Block> out) {
-        for (Element el : parent.children()) {
-            if (isHidden(el)) continue;
-            if (isImageEl(el)) addImage(el, baseDir, out);
-            else walkImages(el, baseDir, out);
-        }
-    }
-
-    private static void emitTextBlocks(Element el, int style, List<EpubBook.Block> out) {
+    private void emitTextBlocks(Element el, String baseDir, EpubCss css, int style,
+                                int initialMask, List<EpubBook.Block> out) {
         InlineBuf buf = new InlineBuf();
-        collectInline(el, buf, style, out);
+        collectInline(el, baseDir, css, buf, style, initialMask, out);
         buf.flush(style, out);
     }
 
-    private static void collectInline(Element parent, InlineBuf buf, int style,
-                                      List<EpubBook.Block> out) {
+    private void collectInline(Element parent, String baseDir, EpubCss css, InlineBuf buf,
+                               int style, int activeMask, List<EpubBook.Block> out) {
         if ("ruby".equals(parent.normalName())) {
-            appendRuby(parent, buf, style, out);
+            appendRuby(parent, baseDir, css, buf, style, activeMask, out);
             return;
         }
         for (Node node : parent.childNodes()) {
             if (node instanceof TextNode) {
-                appendText(buf, ((TextNode) node).getWholeText(), style, out);
+                appendText(buf, ((TextNode) node).getWholeText(), style, activeMask, out);
             } else if (node instanceof Element) {
                 Element child = (Element) node;
                 String tag = child.normalName();
-                if (isSkippedTag(tag) || isHidden(child) || isImageEl(child)) continue;
+                if (isSkippedTag(tag)) continue;
+                EpubCss.Decl decl = css.resolve(child);
+                if (isHidden(child, decl)) continue;
+
                 if (tag.equals("br")) {
                     buf.flush(style, out);
+                } else if (isImageEl(child)) {
+                    appendImage(child, decl, baseDir, buf, style, activeMask, out);
+                } else if (tag.equals("svg")) {
+                    Element svgImg = singleSvgImage(child);
+                    if (svgImg != null) {
+                        appendImage(svgImg, decl, baseDir, buf, style, activeMask, out);
+                    }
                 } else if (tag.equals("ruby")) {
-                    appendRuby(child, buf, style, out);
+                    int rubyMask = mergeInlineMask(activeMask, decl);
+                    appendRuby(child, baseDir, css, buf, style, rubyMask, out);
                 } else {
-                    collectInline(child, buf, style, out);
+                    if (decl != null && decl.display == EpubCss.DISPLAY_BLOCK) {
+                        buf.flush(style, out);
+                        int nextMask = mergeInlineMask(
+                                applyTagMask(activeMask, tag), decl);
+                        collectInline(child, baseDir, css, buf, style, nextMask, out);
+                        buf.flush(style, out);
+                    } else {
+                        int nextMask = mergeInlineMask(
+                                applyTagMask(activeMask, tag), decl);
+                        collectInline(child, baseDir, css, buf, style, nextMask, out);
+                    }
                 }
             }
         }
     }
 
-    /**
-     * Parses HTML5 and W3C XHTML {@code <ruby>} annotations ({@code <rb>}, {@code <rbc>},
-     * {@code <rt>}, {@code <rtc>}, {@code <rp>}), pairing single or multi-run base segments
-     * with their phonetic readings while cleanly handling malformed or empty tags.
-     */
-    private static void appendRuby(Element rubyEl, InlineBuf buf, int style,
-                                   List<EpubBook.Block> out) {
-        List<String> bases = new ArrayList<>(2);
-        List<String> rts = new ArrayList<>(2);
-        collectRubyParts(rubyEl, bases, rts, buf, style, out);
-        flushRubyGroup(bases, rts, buf, style, out);
+    private static int tagInlineMask(String tag) {
+        return applyTagMask(0, tag);
     }
 
-    private static void collectRubyParts(Element container, List<String> bases, List<String> rts,
-                                         InlineBuf outBuf, int style, List<EpubBook.Block> out) {
+    private static int applyTagMask(int mask, String tag) {
+        switch (tag) {
+            case "b":
+            case "strong":
+                return (mask & ~EpubBook.InlineSpan.CLEAR_BOLD) | EpubBook.InlineSpan.BOLD;
+            case "i":
+            case "em":
+            case "cite":
+            case "dfn":
+            case "var":
+                return (mask & ~EpubBook.InlineSpan.CLEAR_ITALIC) | EpubBook.InlineSpan.ITALIC;
+            case "u":
+            case "ins":
+                return mask | EpubBook.InlineSpan.UNDERLINE;
+            case "s":
+            case "del":
+            case "strike":
+                return mask | EpubBook.InlineSpan.STRIKE;
+            case "code":
+            case "kbd":
+            case "samp":
+            case "tt":
+            case "pre":
+                return mask | EpubBook.InlineSpan.CODE;
+            case "sup":
+                return (mask & ~EpubBook.InlineSpan.SUB) | EpubBook.InlineSpan.SUP;
+            case "sub":
+                return (mask & ~EpubBook.InlineSpan.SUP) | EpubBook.InlineSpan.SUB;
+            case "small":
+                return mask | EpubBook.InlineSpan.SMALL;
+            default:
+                return mask;
+        }
+    }
+
+    private static int mergeInlineMask(int mask, EpubCss.Decl decl) {
+        if (decl == null) return mask;
+        int setFlags = mask & 0xFF;
+        int clearFlags = mask & 0x300;
+        if ((decl.clearMask & EpubBook.InlineSpan.CLEAR_BOLD) != 0) {
+            setFlags &= ~EpubBook.InlineSpan.BOLD;
+            clearFlags |= EpubBook.InlineSpan.CLEAR_BOLD;
+        }
+        if ((decl.clearMask & EpubBook.InlineSpan.CLEAR_ITALIC) != 0) {
+            setFlags &= ~EpubBook.InlineSpan.ITALIC;
+            clearFlags |= EpubBook.InlineSpan.CLEAR_ITALIC;
+        }
+        if ((decl.setMask & EpubBook.InlineSpan.BOLD) != 0) {
+            clearFlags &= ~EpubBook.InlineSpan.CLEAR_BOLD;
+        }
+        if ((decl.setMask & EpubBook.InlineSpan.ITALIC) != 0) {
+            clearFlags &= ~EpubBook.InlineSpan.CLEAR_ITALIC;
+        }
+        if ((decl.setMask & EpubBook.InlineSpan.SUP) != 0) {
+            setFlags &= ~EpubBook.InlineSpan.SUB;
+        } else if ((decl.setMask & EpubBook.InlineSpan.SUB) != 0) {
+            setFlags &= ~EpubBook.InlineSpan.SUP;
+        }
+        setFlags |= decl.setMask;
+        return setFlags | clearFlags;
+    }
+
+    private void appendImage(Element el, EpubCss.Decl decl, String baseDir, InlineBuf buf,
+                             int style, int activeMask, List<EpubBook.Block> out) {
+        String src = el.attr("src").trim();
+        if (src.isEmpty()) src = el.attr("xlink:href").trim();
+        if (src.isEmpty()) src = el.attr("href").trim();
+        if (src.isEmpty()) return;
+
+        String resolved = src.startsWith("data:") ? src : normalize(baseDir + src);
+        int[] dims = imageBounds(resolved);
+        if (dims == null || dims[0] <= 0 || dims[1] <= 0) {
+            String alt = norm(el.attr("alt"));
+            if (!alt.isEmpty()) appendText(buf, alt, style, activeMask, out);
+            return;
+        }
+
+        float emW = decl != null ? decl.emW : 0f;
+        float emH = decl != null ? decl.emH : 0f;
+        float pxW = decl != null ? decl.pxW : 0f;
+        float pxH = decl != null ? decl.pxH : 0f;
+        if (emW == 0f && pxW == 0f) pxW = EpubCss.parseHtmlPxAttr(el.attr("width"));
+        if (emH == 0f && pxH == 0f) pxH = EpubCss.parseHtmlPxAttr(el.attr("height"));
+
+        boolean explicitInlineSize = emW > 0f || emH > 0f || pxW > 0f || pxH > 0f;
+        boolean forceBlock = (decl != null && decl.display == EpubCss.DISPLAY_BLOCK)
+                || (!explicitInlineSize
+                && (decl == null || decl.display != EpubCss.DISPLAY_INLINE)
+                && dims[0] >= LARGE_BLOCK_IMAGE_PX && dims[1] >= LARGE_BLOCK_IMAGE_PX);
+
+        if (forceBlock) {
+            buf.flush(style, out);
+            out.add(EpubBook.Block.image(resolved, dims[0], dims[1]));
+            return;
+        }
+
+        // Inline image / gaiji: join pretty-printed line breaks adjacent to East Asian characters
+        boolean prevEastAsian = false;
+        if (buf.sb.length() > 0) {
+            int prevCp = lastNonSpaceCodePoint(buf.sb, buf.trailingLineBreakSpace);
+            if (prevCp != 0 && isEastAsian(prevCp)) {
+                prevEastAsian = true;
+                if (buf.trailingLineBreakSpace && buf.sb.charAt(buf.sb.length() - 1) == ' ') {
+                    buf.sb.setLength(buf.sb.length() - 1);
+                }
+            }
+        }
+        buf.trailingLineBreakSpace = false;
+        buf.lastPlaceholderAfterEastAsian = prevEastAsian;
+
+        int pos = buf.sb.length();
+        buf.sb.append(OBJECT_REPLACEMENT);
+        buf.images.add(new EpubBook.InlineImage(
+                pos, resolved, dims[0], dims[1], emW, emH, pxW, pxH));
+    }
+
+    private int[] imageBounds(String path) {
+        int[] cached = boundsCache.get(path);
+        if (cached != null) return cached;
+        int[] decoded = ImageStore.readBounds(zip, path);
+        boundsCache.put(path, decoded == null ? new int[]{0, 0} : decoded);
+        return decoded;
+    }
+
+    /**
+     * Parses HTML5 and W3C XHTML {@code <ruby>} annotations ({@code <rb>}, {@code <rbc>},
+     * {@code <rt>}, {@code <rtc>}, {@code <rp>}), preserving inline formatting on the ruby base.
+     */
+    private void appendRuby(Element rubyEl, String baseDir, EpubCss css, InlineBuf buf,
+                            int style, int activeMask, List<EpubBook.Block> out) {
+        List<String> bases = new ArrayList<>(2);
+        List<String> rts = new ArrayList<>(2);
+        collectRubyParts(rubyEl, baseDir, css, bases, rts, buf, style, activeMask, out);
+        flushRubyGroup(bases, rts, buf, style, activeMask, out);
+    }
+
+    private void collectRubyParts(Element container, String baseDir, EpubCss css,
+                                  List<String> bases, List<String> rts, InlineBuf outBuf,
+                                  int style, int activeMask, List<EpubBook.Block> out) {
         StringBuilder looseBase = new StringBuilder();
         for (Node node : container.childNodes()) {
             if (node instanceof TextNode) {
                 String chunk = normRubyPart(((TextNode) node).getWholeText());
                 if (!chunk.isEmpty()) {
                     if (!rts.isEmpty()) {
-                        flushRubyGroup(bases, rts, outBuf, style, out);
+                        flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
                     }
                     looseBase.append(chunk);
                 }
@@ -493,14 +772,16 @@ public final class EpubParser {
             if (!(node instanceof Element)) continue;
             Element el = (Element) node;
             String tag = el.normalName();
-            if (isSkippedTag(tag) || isHidden(el) || isImageEl(el)) continue;
+            if (isSkippedTag(tag)) continue;
+            EpubCss.Decl decl = css.resolve(el);
+            if (isHidden(el, decl) || isImageEl(el)) continue;
 
             if (tag.equals("br")) {
                 if (looseBase.length() > 0) {
                     bases.add(looseBase.toString());
                     looseBase.setLength(0);
                 }
-                flushRubyGroup(bases, rts, outBuf, style, out);
+                flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
                 outBuf.flush(style, out);
                 continue;
             }
@@ -509,8 +790,8 @@ public final class EpubParser {
                     bases.add(looseBase.toString());
                     looseBase.setLength(0);
                 }
-                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, out);
-                collectRubyParts(el, bases, rts, outBuf, style, out);
+                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
+                collectRubyParts(el, baseDir, css, bases, rts, outBuf, style, activeMask, out);
                 continue;
             }
             if (tag.equals("rb")) {
@@ -518,7 +799,7 @@ public final class EpubParser {
                     bases.add(looseBase.toString());
                     looseBase.setLength(0);
                 }
-                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, out);
+                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
                 String rbText = norm(plainTextWithoutRuby(el));
                 if (!rbText.isEmpty()) bases.add(rbText);
                 continue;
@@ -531,7 +812,10 @@ public final class EpubParser {
                 for (Node rtcChild : el.childNodes()) {
                     if (rtcChild instanceof Element) {
                         Element re = (Element) rtcChild;
-                        if (isSkippedTag(re.normalName()) || isHidden(re)) continue;
+                        if (isSkippedTag(re.normalName())
+                                || isHidden(re, css.resolve(re))) {
+                            continue;
+                        }
                         if ("rt".equals(re.normalName())) {
                             rts.add(norm(plainTextWithoutRuby(re)));
                         }
@@ -555,14 +839,13 @@ public final class EpubParser {
                     bases.add(looseBase.toString());
                     looseBase.setLength(0);
                 }
-                flushRubyGroup(bases, rts, outBuf, style, out);
-                appendRuby(el, outBuf, style, out);
+                flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
+                appendRuby(el, baseDir, css, outBuf, style, activeMask, out);
                 continue;
             }
-            // Any other inline wrapper inside <ruby> (<span>, <b>, <em>, <a>, etc.)
             String inlineText = normRubyPart(plainTextWithoutRuby(el));
             if (!inlineText.isEmpty()) {
-                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, out);
+                if (!rts.isEmpty()) flushRubyGroup(bases, rts, outBuf, style, activeMask, out);
                 looseBase.append(inlineText);
             }
         }
@@ -572,57 +855,58 @@ public final class EpubParser {
     }
 
     private static void flushRubyGroup(List<String> bases, List<String> rts, InlineBuf outBuf,
-                                       int style, List<EpubBook.Block> out) {
+                                       int style, int activeMask, List<EpubBook.Block> out) {
         if (bases.isEmpty() && rts.isEmpty()) return;
         if (bases.isEmpty()) {
-            // Malformed <ruby><rt>orphan</rt></ruby>: keep the reading as plain text.
             for (String rt : rts) {
-                if (!rt.isEmpty()) appendText(outBuf, rt, style, out);
+                if (!rt.isEmpty()) appendText(outBuf, rt, style, activeMask, out);
             }
             rts.clear();
             return;
         }
         if (rts.isEmpty()) {
-            for (String base : bases) appendText(outBuf, base, style, out);
+            for (String base : bases) appendText(outBuf, base, style, activeMask, out);
             bases.clear();
             return;
         }
         if (bases.size() == rts.size()) {
             for (int i = 0; i < bases.size(); i++) {
-                emitSingleRuby(bases.get(i), rts.get(i), outBuf, style, out);
+                emitSingleRuby(bases.get(i), rts.get(i), outBuf, style, activeMask, out);
             }
         } else {
             StringBuilder joinedBase = new StringBuilder();
             for (String b : bases) joinedBase.append(b);
             StringBuilder joinedRt = new StringBuilder();
             for (String r : rts) joinedRt.append(r);
-            emitSingleRuby(joinedBase.toString(), joinedRt.toString(), outBuf, style, out);
+            emitSingleRuby(joinedBase.toString(), joinedRt.toString(),
+                    outBuf, style, activeMask, out);
         }
         bases.clear();
         rts.clear();
     }
 
     private static void emitSingleRuby(String base, String rt, InlineBuf outBuf, int style,
-                                       List<EpubBook.Block> out) {
+                                       int activeMask, List<EpubBook.Block> out) {
         String cleanBase = norm(base);
         String cleanRt = norm(rt);
         if (cleanBase.isEmpty()) {
-            if (!cleanRt.isEmpty()) appendText(outBuf, cleanRt, style, out);
+            if (!cleanRt.isEmpty()) appendText(outBuf, cleanRt, style, activeMask, out);
             return;
         }
         joinEastAsianLineBreakIfNeeded(outBuf, Character.codePointAt(cleanBase, 0));
         int start = outBuf.sb.length();
         outBuf.sb.append(cleanBase);
         outBuf.trailingLineBreakSpace = false;
+        outBuf.lastPlaceholderAfterEastAsian = false;
         int end = outBuf.sb.length();
+        outBuf.recordSpan(start, end, activeMask);
         if (!cleanRt.isEmpty() && start < end) {
             outBuf.rubies.add(new EpubBook.Ruby(start, end, cleanRt));
         }
     }
 
     private static String normRubyPart(String raw) {
-        return raw.replace('\u00A0', ' ').replace('\u200B', ' ')
-                .replace('\r', ' ').replace('\n', ' ').replace('\t', ' ').trim();
+        return norm(raw);
     }
 
     private static String plainTextWithoutRuby(Element el) {
@@ -638,7 +922,8 @@ public final class EpubParser {
             } else if (n instanceof Element) {
                 Element e = (Element) n;
                 String tag = e.normalName();
-                if (isSkippedTag(tag) || isHidden(e) || "rt".equals(tag) || "rtc".equals(tag)) {
+                if (isSkippedTag(tag) || isHidden(e, null)
+                        || "rt".equals(tag) || "rtc".equals(tag)) {
                     continue;
                 }
                 collectPlainWithoutRuby(e, sb);
@@ -650,19 +935,16 @@ public final class EpubParser {
         if (buf.trailingLineBreakSpace && buf.sb.length() >= 2
                 && buf.sb.charAt(buf.sb.length() - 1) == ' ') {
             int prevCp = Character.codePointBefore(buf.sb, buf.sb.length() - 1);
-            if (isEastAsian(prevCp) && isEastAsian(nextCodePoint)) {
+            boolean prevEast = isEastAsian(prevCp)
+                    || (prevCp == OBJECT_REPLACEMENT && buf.lastPlaceholderAfterEastAsian);
+            if (prevEast && isEastAsian(nextCodePoint)) {
                 buf.sb.setLength(buf.sb.length() - 1);
             }
         }
         buf.trailingLineBreakSpace = false;
     }
 
-    /**
-     * Folds source whitespace while respecting East Asian scripts: a line break before a
-     * fullwidth paragraph indent starts a new paragraph, and a line break between two East
-     * Asian characters joins directly instead of inserting an ASCII space mid-word.
-     */
-    private static void appendText(InlineBuf buf, String raw, int style,
+    private static void appendText(InlineBuf buf, String raw, int style, int activeMask,
                                    List<EpubBook.Block> out) {
         StringBuilder sb = buf.sb;
         int n = raw.length();
@@ -689,10 +971,12 @@ public final class EpubParser {
                     i = j;
                     continue;
                 }
-                int prevCp = sb.length() > 0 ? lastNonSpaceCodePoint(sb, buf.trailingLineBreakSpace) : 0;
+                int prevCp = sb.length() > 0
+                        ? lastNonSpaceCodePoint(sb, buf.trailingLineBreakSpace) : 0;
                 int nextCp = j < n ? Character.codePointAt(raw, j) : 0;
-                if (sawLineBreak && prevCp != 0 && nextCp != 0
-                        && isEastAsian(prevCp) && isEastAsian(nextCp)) {
+                boolean prevEast = prevCp != 0 && (isEastAsian(prevCp)
+                        || (prevCp == OBJECT_REPLACEMENT && buf.lastPlaceholderAfterEastAsian));
+                if (sawLineBreak && prevEast && nextCp != 0 && isEastAsian(nextCp)) {
                     if (buf.trailingLineBreakSpace && sb.length() > 0
                             && sb.charAt(sb.length() - 1) == ' ') {
                         sb.setLength(sb.length() - 1);
@@ -702,7 +986,9 @@ public final class EpubParser {
                     continue;
                 }
                 if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
+                    int spPos = sb.length();
                     sb.append(' ');
+                    buf.recordSpan(spPos, spPos + 1, activeMask);
                 }
                 buf.trailingLineBreakSpace = (j == n) && sawLineBreak;
                 i = j;
@@ -710,7 +996,10 @@ public final class EpubParser {
             }
             int cp = Character.codePointAt(raw, i);
             joinEastAsianLineBreakIfNeeded(buf, cp);
+            int runStart = sb.length();
             sb.appendCodePoint(cp);
+            buf.lastPlaceholderAfterEastAsian = false;
+            buf.recordSpan(runStart, sb.length(), activeMask);
             i += Character.charCount(cp);
         }
     }
@@ -821,30 +1110,13 @@ public final class EpubParser {
         return tag.equals("img") || tag.equals("image");
     }
 
-    private static boolean hasImages(Element el) {
-        return !el.select("img,image").isEmpty();
-    }
-
-    private static boolean isHidden(Element el) {
-        String style = el.attr("style").replace(" ", "").toLowerCase(Locale.ROOT);
-        if (style.contains("display:none") || style.contains("visibility:hidden")) return true;
-        return !el.attr("hidden").isEmpty();
-    }
-
-    private void addImage(Element el, String baseDir, List<EpubBook.Block> out) {
-        String src = el.attr("src");
-        if (src.isEmpty()) src = el.attr("xlink:href");
-        if (src.isEmpty()) src = el.attr("href");
-        if (src.isEmpty() || src.startsWith("data:")) return;
-        String path = normalize(baseDir + src);
-        try (java.io.InputStream in = zip.open(path)) {
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inJustDecodeBounds = true;
-            BitmapFactory.decodeStream(in, null, opts);
-            if (opts.outWidth <= 0 || opts.outHeight <= 0) return;
-            out.add(EpubBook.Block.image(path, opts.outWidth, opts.outHeight));
-        } catch (Exception ignored) {
+    private static boolean isHidden(Element el, EpubCss.Decl decl) {
+        if (decl != null && decl.display == EpubCss.DISPLAY_NONE) return true;
+        if (decl == null) {
+            String style = el.attr("style").replace(" ", "").toLowerCase(Locale.ROOT);
+            if (style.contains("display:none") || style.contains("visibility:hidden")) return true;
         }
+        return el.hasAttr("hidden");
     }
 
     private static void assignOffsets(EpubBook.Chapter chapter) {
@@ -867,15 +1139,24 @@ public final class EpubParser {
     static String normalize(String path) {
         String p = path.replace('\\', '/');
         List<String> parts = new ArrayList<>();
-        for (String segment : p.split("/")) {
-            if (segment.isEmpty() || segment.equals(".")) continue;
-            if (segment.equals("..")) {
-                if (!parts.isEmpty()) parts.remove(parts.size() - 1);
-            } else {
-                parts.add(segment);
+        int start = 0;
+        int n = p.length();
+        while (start <= n) {
+            int slash = p.indexOf('/', start);
+            if (slash < 0) slash = n;
+            if (slash > start) {
+                String segment = p.substring(start, slash);
+                if (!segment.equals(".")) {
+                    if (segment.equals("..")) {
+                        if (!parts.isEmpty()) parts.remove(parts.size() - 1);
+                    } else {
+                        parts.add(segment);
+                    }
+                }
             }
+            start = slash + 1;
         }
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(p.length());
         for (int i = 0; i < parts.size(); i++) {
             if (i > 0) sb.append('/');
             sb.append(parts.get(i));
@@ -883,11 +1164,44 @@ public final class EpubParser {
         return sb.toString();
     }
 
+    /** Single-pass whitespace normalizer (zero regex compilation / allocation overhead). */
     static String norm(String text) {
-        if (text == null) return "";
-        return text.replace('\u00A0', ' ')
-                .replace('\u200B', ' ')
-                .replaceAll("\\s+", " ")
-                .trim();
+        if (text == null || text.isEmpty()) return "";
+        int n = text.length();
+        StringBuilder sb = new StringBuilder(n);
+        boolean inSpace = true;
+        for (int i = 0; i < n; i++) {
+            char c = text.charAt(i);
+            if (c <= ' ' || c == '\u00A0' || c == '\u200B') {
+                if (!inSpace) {
+                    sb.append(' ');
+                    inSpace = true;
+                }
+            } else {
+                sb.append(c);
+                inSpace = false;
+            }
+        }
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ' ') {
+            sb.setLength(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    static byte[] decodeDataUri(String uri) {
+        if (uri == null || !uri.startsWith("data:")) return null;
+        int comma = uri.indexOf(',');
+        if (comma < 0) return null;
+        String meta = uri.substring(5, comma).toLowerCase(Locale.ROOT);
+        String payload = uri.substring(comma + 1);
+        try {
+            if (meta.contains(";base64")) {
+                return Base64.decode(payload, Base64.DEFAULT);
+            }
+            return java.net.URLDecoder.decode(payload, StandardCharsets.UTF_8.name())
+                    .getBytes(StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
