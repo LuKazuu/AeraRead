@@ -43,7 +43,10 @@ public class MainActivity extends AppCompatActivity implements LibraryAdapter.Li
         return t;
     });
     private Snackbar scanSnackbar;
+    private int scanGeneration;
     private boolean scanning;
+    private boolean pendingScan;
+    private boolean pendingUserInitiated;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -136,29 +139,69 @@ public class MainActivity extends AppCompatActivity implements LibraryAdapter.Li
     }
 
     private void manageFolders() {
-        new FoldersSheet(this, () -> scan(false)).show();
+        new FoldersSheet(this, this::onFoldersChanged).show();
+    }
+
+    private void onFoldersChanged() {
+        scanGeneration++;
+        refresh();
+        if (Library.folders(this).isEmpty()) {
+            pendingScan = false;
+            pendingUserInitiated = false;
+            if (scanSnackbar != null) scanSnackbar.dismiss();
+        } else {
+            scan(false);
+        }
     }
 
     void scan(boolean userInitiated) {
         List<String> folders = Library.folders(this);
         if (folders.isEmpty()) {
+            scanGeneration++;
+            pendingScan = false;
+            pendingUserInitiated = false;
+            if (scanSnackbar != null) scanSnackbar.dismiss();
+            if (!Library.books(this).isEmpty()) {
+                Library.clearBooks(this);
+            }
+            refresh();
             if (userInitiated) {
                 Snackbar.make(grid, R.string.no_folders, Snackbar.LENGTH_SHORT).show();
             }
             return;
         }
-        if (scanning) return;
+        if (scanning) {
+            scanGeneration++;
+            pendingScan = true;
+            pendingUserInitiated |= userInitiated;
+            return;
+        }
         scanning = true;
+        final int generation = ++scanGeneration;
         if (scanSnackbar != null) scanSnackbar.dismiss();
         scanSnackbar = Snackbar.make(grid, R.string.scanning, Snackbar.LENGTH_INDEFINITE);
         scanSnackbar.show();
 
-        List<Book> existing = Library.books(this);
+        final List<String> snapshotFolders = new java.util.ArrayList<>(folders);
+        final List<Book> existing = Library.books(this);
         bg.execute(() -> {
-            FolderScanner.Result result = FolderScanner.scan(this, folders, existing, null);
+            FolderScanner.Result result =
+                    FolderScanner.scan(this, snapshotFolders, existing, null);
             runOnUiThread(() -> {
                 scanning = false;
                 if (isFinishing() || isDestroyed()) return;
+                if (generation != scanGeneration) {
+                    if (pendingScan) {
+                        boolean queuedUser = pendingUserInitiated;
+                        pendingScan = false;
+                        pendingUserInitiated = false;
+                        scan(queuedUser);
+                    } else {
+                        if (scanSnackbar != null) scanSnackbar.dismiss();
+                        refresh();
+                    }
+                    return;
+                }
                 if (scanSnackbar != null) scanSnackbar.dismiss();
                 Library.saveBooks(this, result.books);
                 refresh();
@@ -240,6 +283,7 @@ public class MainActivity extends AppCompatActivity implements LibraryAdapter.Li
 
     @Override
     protected void onDestroy() {
+        scanGeneration++;
         if (scanSnackbar != null) {
             scanSnackbar.dismiss();
             scanSnackbar = null;

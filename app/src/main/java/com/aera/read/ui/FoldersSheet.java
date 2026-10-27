@@ -41,7 +41,7 @@ public class FoldersSheet {
         RecyclerView list = root.findViewById(R.id.folder_list);
         View empty = root.findViewById(R.id.folder_empty);
         list.setLayoutManager(new LinearLayoutManager(activity));
-        FolderAdapter adapter = new FolderAdapter();
+        FolderAdapter adapter = new FolderAdapter(empty);
         list.setAdapter(adapter);
 
         View addRow = root.findViewById(R.id.row_add_folder);
@@ -62,6 +62,11 @@ public class FoldersSheet {
 
     private class FolderAdapter extends RecyclerView.Adapter<FolderAdapter.Holder> {
         private final List<String> folders = new ArrayList<>();
+        private final View emptyView;
+
+        FolderAdapter(View emptyView) {
+            this.emptyView = emptyView;
+        }
 
         void submit(List<String> items) {
             folders.clear();
@@ -82,7 +87,10 @@ public class FoldersSheet {
             holder.name.setText(activity.folderLabel(uri));
             holder.remove.setOnClickListener(v -> {
                 Library.removeFolder(activity, uri);
-                if (dialog != null) dialog.dismiss();
+                reload(FolderAdapter.this, emptyView);
+                if (folders.isEmpty() && dialog != null) {
+                    dialog.dismiss();
+                }
                 listener.onFoldersChanged();
             });
         }

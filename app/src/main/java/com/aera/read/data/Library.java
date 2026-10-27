@@ -1,7 +1,10 @@
 package com.aera.read.data;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
+import android.provider.DocumentsContract;
 
 import org.json.JSONArray;
 
@@ -65,8 +68,95 @@ public final class Library {
     }
 
     public static void removeFolder(Context c, String treeUri) {
+        if (treeUri == null) return;
+        try {
+            c.getContentResolver().releasePersistableUriPermission(
+                    Uri.parse(treeUri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) {
+        }
         List<String> all = folders(c);
-        if (all.remove(treeUri)) saveFolders(c, all);
+        boolean changed = all.remove(treeUri);
+        if (changed) saveFolders(c, all);
+        if (all.isEmpty()) {
+            clearBooks(c);
+        } else {
+            pruneBooksFromFolder(c, treeUri, all);
+        }
+    }
+
+    public static void clearBooks(Context c) {
+        List<Book> all = books(c);
+        if (all.isEmpty()) return;
+        SharedPreferences.Editor editor = sp(c).edit();
+        synchronized (LOCK) {
+            for (Book b : all) {
+                deleteQuietly(b.coverFile);
+                BOOKMARK_CACHE.remove(b.id());
+                editor.remove("bm_" + b.id());
+            }
+        }
+        editor.apply();
+        persistBookList(c, Collections.emptyList());
+    }
+
+    private static void pruneBooksFromFolder(Context c, String removedFolder,
+                                             List<String> remainingFolders) {
+        List<Book> all = books(c);
+        List<Book> kept = new ArrayList<>(all.size());
+        SharedPreferences.Editor editor = null;
+        for (Book b : all) {
+            boolean inRemoved = belongsToFolder(b.uri, removedFolder);
+            boolean inRemaining = false;
+            if (inRemoved) {
+                for (String rem : remainingFolders) {
+                    if (belongsToFolder(b.uri, rem)) {
+                        inRemaining = true;
+                        break;
+                    }
+                }
+            }
+            if (inRemoved && !inRemaining) {
+                deleteQuietly(b.coverFile);
+                if (editor == null) editor = sp(c).edit();
+                synchronized (LOCK) {
+                    BOOKMARK_CACHE.remove(b.id());
+                }
+                editor.remove("bm_" + b.id());
+            } else {
+                kept.add(b);
+            }
+        }
+        if (editor != null) {
+            editor.apply();
+            saveBooks(c, kept);
+        }
+    }
+
+    public static boolean belongsToFolder(String bookUri, String folderTreeUri) {
+        if (bookUri == null || folderTreeUri == null
+                || bookUri.isEmpty() || folderTreeUri.isEmpty()) {
+            return false;
+        }
+        if (bookUri.equals(folderTreeUri)
+                || bookUri.startsWith(folderTreeUri.endsWith("/")
+                        ? folderTreeUri : folderTreeUri + "/")) {
+            return true;
+        }
+        try {
+            Uri bUri = Uri.parse(bookUri);
+            Uri fUri = Uri.parse(folderTreeUri);
+            if (!Objects.equals(bUri.getScheme(), fUri.getScheme())
+                    || !Objects.equals(bUri.getAuthority(), fUri.getAuthority())) {
+                return false;
+            }
+            if (DocumentsContract.isTreeUri(bUri) && DocumentsContract.isTreeUri(fUri)) {
+                return Objects.equals(
+                        DocumentsContract.getTreeDocumentId(bUri),
+                        DocumentsContract.getTreeDocumentId(fUri));
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     private static void saveFolders(Context c, List<String> folders) {

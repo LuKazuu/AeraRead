@@ -41,22 +41,7 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
 
-      - name: Restore signing key
-        env:
-          KEYSTORE_B64: ${{ secrets.AERA_KEYSTORE_B64 }}
-        run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::error::Secret AERA_KEYSTORE_B64 is missing - add your signing secrets first."
-            exit 1
-          fi
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/aera-release.jks"
-
       - name: Compile R8-optimized APK
-        env:
-          AERA_KEYSTORE: ${{ runner.temp }}/aera-release.jks
-          AERA_STORE_PASSWORD: ${{ secrets.AERA_STORE_PASSWORD }}
-          AERA_KEY_ALIAS: ${{ secrets.AERA_KEY_ALIAS }}
-          AERA_KEY_PASSWORD: ${{ secrets.AERA_KEY_PASSWORD }}
         run: |
           sed -i 's/\r$//' build.sh gradlew
           bash build.sh apk --no-daemon

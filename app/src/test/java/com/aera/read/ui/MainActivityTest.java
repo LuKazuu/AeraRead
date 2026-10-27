@@ -252,4 +252,125 @@ public class MainActivityTest {
             assertEquals("Books", activity.folderLabel(Uri.fromFile(root).toString()));
         }
     }
+
+    @Test
+    public void removingTheOnlyFolderClearsTheLibraryAndShowsEmptyState() throws Exception {
+        place("meditations.epub", "meditations.epub");
+        place("Novels/alice.epub", "alice.epub");
+        grantFolder();
+
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            MainActivity activity = TestSupport.currentActivity(scenario);
+            TestSupport.waitUntil(() -> Library.books(app).size() == 2, 8000,
+                    "both books discovered before folder removal");
+            TestSupport.idle();
+            String coverPath = Library.books(app).get(0).coverFile;
+            assertFalse(coverPath.isEmpty());
+            assertTrue(new File(coverPath).exists());
+
+            activity.findViewById(R.id.btn_folders).performClick();
+            TestSupport.idle();
+            BottomSheetDialog sheet = (BottomSheetDialog) ShadowDialog.getLatestDialog();
+            assertNotNull(sheet);
+            RecyclerView list = sheet.findViewById(R.id.folder_list);
+            assertNotNull(list);
+            list.measure(
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.AT_MOST));
+            list.layout(0, 0, 800, 400);
+
+            View removeBtn = list.getChildAt(0).findViewById(R.id.folder_remove);
+            assertNotNull(removeBtn);
+            removeBtn.performClick();
+            TestSupport.idle();
+
+            assertTrue("folder grant removed", Library.folders(app).isEmpty());
+            assertTrue("books from removed only-folder must leave the library immediately",
+                    Library.books(app).isEmpty());
+            assertFalse("cached cover thumbnail deleted with removed folder",
+                    new File(coverPath).exists());
+            assertEquals(View.GONE, activity.findViewById(R.id.grid).getVisibility());
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.empty_state).getVisibility());
+
+            // Pressing Refresh afterwards must keep the library empty too.
+            activity.findViewById(R.id.btn_scan).performClick();
+            TestSupport.idle();
+            assertTrue(Library.books(app).isEmpty());
+            assertEquals(View.GONE, activity.findViewById(R.id.grid).getVisibility());
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.empty_state).getVisibility());
+        }
+    }
+
+    @Test
+    public void removingOneOfMultipleFoldersDropsOnlyThatFoldersBooks() throws Exception {
+        place("FolderA/meditations.epub", "meditations.epub");
+        place("FolderB/alice.epub", "alice.epub");
+        String folderAUri = "content://" + TestDocumentsProvider.AUTHORITY + "/tree/FolderA";
+        String folderBUri = "content://" + TestDocumentsProvider.AUTHORITY + "/tree/FolderB";
+        Library.addFolder(app, folderAUri);
+        Library.addFolder(app, folderBUri);
+
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            MainActivity activity = TestSupport.currentActivity(scenario);
+            TestSupport.waitUntil(() -> Library.books(app).size() == 2, 8000,
+                    "both folders scanned");
+            TestSupport.idle();
+
+            activity.findViewById(R.id.btn_folders).performClick();
+            TestSupport.idle();
+            BottomSheetDialog sheet = (BottomSheetDialog) ShadowDialog.getLatestDialog();
+            assertNotNull(sheet);
+            RecyclerView list = sheet.findViewById(R.id.folder_list);
+            assertNotNull(list);
+            list.measure(
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.AT_MOST));
+            list.layout(0, 0, 800, 600);
+            assertEquals(2, list.getAdapter().getItemCount());
+
+            // Remove FolderA (row 0) — Meditations must vanish while Alice in FolderB stays.
+            list.getChildAt(0).findViewById(R.id.folder_remove).performClick();
+            TestSupport.idle();
+            TestSupport.waitUntil(() -> Library.books(app).size() == 1, 8000,
+                    "FolderA book removed, FolderB book kept");
+            TestSupport.idle();
+
+            assertEquals(1, Library.folders(app).size());
+            assertEquals(folderBUri, Library.folders(app).get(0));
+            assertEquals(1, Library.books(app).size());
+            assertTrue(Library.books(app).get(0).title.toLowerCase().contains("alice"));
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.grid).getVisibility());
+
+            // Now remove FolderB too (the remaining row in the still-open sheet).
+            list.measure(
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.AT_MOST));
+            list.layout(0, 0, 800, 600);
+            list.getChildAt(0).findViewById(R.id.folder_remove).performClick();
+            TestSupport.idle();
+
+            assertTrue(Library.folders(app).isEmpty());
+            assertTrue(Library.books(app).isEmpty());
+            assertEquals(View.GONE, activity.findViewById(R.id.grid).getVisibility());
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.empty_state).getVisibility());
+        }
+    }
+
+    @Test
+    public void refreshWithNoFoldersPurgesAnyOrphanedBooks() throws Exception {
+        TestSupport.install(app, "meditations.epub");
+        assertTrue(Library.folders(app).isEmpty());
+        assertEquals(1, Library.books(app).size());
+
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            MainActivity activity = TestSupport.currentActivity(scenario);
+            activity.findViewById(R.id.btn_scan).performClick();
+            TestSupport.idle();
+
+            assertTrue("refreshing with zero folders clears stale library entries",
+                    Library.books(app).isEmpty());
+            assertEquals(View.GONE, activity.findViewById(R.id.grid).getVisibility());
+            assertEquals(View.VISIBLE, activity.findViewById(R.id.empty_state).getVisibility());
+        }
+    }
 }
