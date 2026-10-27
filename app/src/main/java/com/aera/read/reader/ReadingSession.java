@@ -76,11 +76,19 @@ public interface ReadingSession extends AutoCloseable {
 
     void toggleBookmark(int page);
 
+    default void toggleBookmark(int page, float fraction) {
+        toggleBookmark(page);
+    }
+
     List<Bookmark> bookmarks();
 
     String bookmarkTitle(int page);
 
     int pageOfBookmark(Bookmark bookmark);
+
+    default float fractionOfBookmark(Bookmark bookmark) {
+        return bookmark == null ? 0f : Math.max(0f, Math.min(0.999f, bookmark.fraction));
+    }
 
     void deleteBookmark(Bookmark bookmark);
 

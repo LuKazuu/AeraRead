@@ -32,6 +32,10 @@ public class NavSheet {
         void onJump(int page);
     }
 
+    public interface PositionJumpListener {
+        void onJump(int page, float fraction);
+    }
+
     static final class Entry {
         final String title;
         final int page;
@@ -45,7 +49,7 @@ public class NavSheet {
     private final Context ctx;
     private final ReadingSession session;
     private final int currentPage;
-    private final JumpListener listener;
+    private final PositionJumpListener listener;
     private final Runnable onBookmarksChanged;
     private final int initialTab;
 
@@ -57,11 +61,17 @@ public class NavSheet {
 
     public NavSheet(Context ctx, ReadingSession session, int currentPage, JumpListener listener,
                     Runnable onBookmarksChanged) {
+        this(ctx, session, currentPage, (page, fraction) -> listener.onJump(page),
+                onBookmarksChanged, 0);
+    }
+
+    public NavSheet(Context ctx, ReadingSession session, int currentPage,
+                    PositionJumpListener listener, Runnable onBookmarksChanged) {
         this(ctx, session, currentPage, listener, onBookmarksChanged, 0);
     }
 
-    private NavSheet(Context ctx, ReadingSession session, int currentPage, JumpListener listener,
-                     Runnable onBookmarksChanged, int initialTab) {
+    private NavSheet(Context ctx, ReadingSession session, int currentPage,
+                     PositionJumpListener listener, Runnable onBookmarksChanged, int initialTab) {
         this.ctx = ctx;
         this.session = session;
         this.currentPage = currentPage;
@@ -167,7 +177,11 @@ public class NavSheet {
     }
 
     private void jump(int page) {
-        listener.onJump(page);
+        jump(page, 0f);
+    }
+
+    private void jump(int page, float fraction) {
+        listener.onJump(page, fraction);
         dismiss();
     }
 
@@ -243,7 +257,15 @@ public class NavSheet {
         public void onBindViewHolder(@NonNull Holder holder, int position) {
             Bookmark bookmark = items.get(position);
             int page = session.pageOfBookmark(bookmark);
+            float fraction = session.fractionOfBookmark(bookmark);
+            boolean current = page == currentPage;
             holder.title.setText(session.bookmarkTitle(page));
+            holder.title.setTextColor(current
+                    ? Ui.colorAttr(holder.title.getContext(),
+                            com.google.android.material.R.attr.colorPrimary)
+                    : Ui.colorAttr(holder.title.getContext(),
+                            com.google.android.material.R.attr.colorOnSurface));
+            holder.title.setTypeface(null, current ? Typeface.BOLD : Typeface.NORMAL);
             if (bookmark.chapter < 0) {
                 holder.sub.setVisibility(View.GONE);
             } else {
@@ -251,7 +273,7 @@ public class NavSheet {
                 holder.sub.setText(session.pageLabel(page));
             }
             holder.divider.setVisibility(position == items.size() - 1 ? View.GONE : View.VISIBLE);
-            holder.itemView.setOnClickListener(v -> jump(session.pageOfBookmark(bookmark)));
+            holder.itemView.setOnClickListener(v -> jump(page, fraction));
             holder.delete.setOnClickListener(v -> {
                 session.deleteBookmark(bookmark);
                 if (onBookmarksChanged != null) onBookmarksChanged.run();

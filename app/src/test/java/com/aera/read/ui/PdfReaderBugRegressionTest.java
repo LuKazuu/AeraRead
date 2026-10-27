@@ -506,6 +506,114 @@ public class PdfReaderBugRegressionTest {
         }
     }
 
+    @Test
+    public void pdfBookmarksCanBeViewedJumpedToExactSeamAndDeletedFromToolbar() throws Exception {
+        ReaderPrefs prefs = new ReaderPrefs(app);
+        prefs.viewMode = "scroll";
+        prefs.theme = "light";
+        prefs.save();
+
+        Book pdf = TestSupport.installFakePdf(app, "Bookmarkable PDF");
+        PdfSession.sourceFactory = (ctx, b) -> PdfRendererSource.fromRasterizer(
+                createWideMarginCroppedRasterizer(12));
+
+        Intent intent = new Intent(app, ReaderActivity.class);
+        intent.putExtra(ReaderActivity.EXTRA_BOOK_ID, pdf.id());
+
+        try (ActivityController<ReaderActivity> ctrl =
+                     Robolectric.buildActivity(ReaderActivity.class, intent).setup()) {
+            ReaderActivity act = ctrl.get();
+            TestSupport.waitUntil(
+                    () -> act.findViewById(R.id.loading).getVisibility() == View.GONE,
+                    6000, "pdf loaded");
+            View root = act.findViewById(R.id.reader_root);
+            layoutReaderAndSettleRelayout(root, 822, 1480);
+
+            MaterialToolbar topBar = act.findViewById(R.id.top_bar);
+            android.view.MenuItem navItem = topBar.getMenu().findItem(R.id.action_toc);
+            assertNotNull(navItem);
+            assertTrue("PDF toolbar must expose Bookmarks list action", navItem.isVisible());
+            assertEquals("Bookmarks", navItem.getTitle().toString());
+
+            // Scroll to Page 4 and stop 58% down between Page 4 and Page 5
+            RecyclerView rv = act.findViewById(R.id.scroll_list);
+            LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
+            assertNotNull(lm);
+            act.goToPage(4);
+            layoutReader(root, 822, 1480);
+            waitForVisibleScrollBitmaps(rv, 6000);
+            layoutReader(root, 822, 1480);
+
+            View page4 = lm.findViewByPosition(4);
+            assertNotNull(page4);
+            rv.scrollBy(0, Math.round(page4.getHeight() * 0.58f));
+            layoutReader(root, 822, 1480);
+            waitForVisibleScrollBitmaps(rv, 6000);
+            layoutReader(root, 822, 1480);
+
+            View page5AtBookmark = lm.findViewByPosition(5);
+            assertNotNull(page5AtBookmark);
+            int bookmarkedSeamTop = page5AtBookmark.getTop();
+
+            // Tap the real Bookmark toolbar icon to bookmark this exact part of the PDF
+            topBar.getMenu().performIdentifierAction(R.id.action_bookmark, 0);
+            Robolectric.flushForegroundThreadScheduler();
+            assertEquals(act.getString(R.string.remove_bookmark),
+                    topBar.getMenu().findItem(R.id.action_bookmark).getTitle().toString());
+
+            // Jump all the way back to Page 0
+            act.goToPage(0);
+            layoutReader(root, 822, 1480);
+            assertEquals(0, lm.findFirstVisibleItemPosition());
+            assertEquals(act.getString(R.string.add_bookmark),
+                    topBar.getMenu().findItem(R.id.action_bookmark).getTitle().toString());
+
+            // Tap the real Bookmarks list icon in the PDF toolbar!
+            topBar.getMenu().performIdentifierAction(R.id.action_toc, 0);
+            Dialog bmDialog = ShadowDialog.getLatestDialog();
+            assertNotNull(bmDialog);
+            assertEquals(View.GONE, bmDialog.findViewById(R.id.nav_tabs).getVisibility());
+            android.widget.TextView sheetTitle = bmDialog.findViewById(R.id.nav_title);
+            assertEquals("Bookmarks", sheetTitle.getText().toString());
+
+            View sheetRoot = bmDialog.findViewById(R.id.sheet_root);
+            sheetRoot.measure(View.MeasureSpec.makeMeasureSpec(822, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.AT_MOST));
+            sheetRoot.layout(0, 0, 822, sheetRoot.getMeasuredHeight());
+
+            RecyclerView bmList = bmDialog.findViewById(R.id.list);
+            assertEquals("Saved PDF bookmark must appear in Bookmarks sheet",
+                    1, bmList.getChildCount());
+
+            // Tap the bookmark row -> must jump right back to Page 4 at the exact 58% seam!
+            bmList.getChildAt(0).performClick();
+            layoutReader(root, 822, 1480);
+            waitForVisibleScrollBitmaps(rv, 6000);
+            layoutReader(root, 822, 1480);
+
+            assertEquals(4, lm.findFirstVisibleItemPosition());
+            View page5Restored = lm.findViewByPosition(5);
+            assertNotNull(page5Restored);
+            assertTrue("Jumping to PDF bookmark must restore exact bookmarked part (expected="
+                            + bookmarkedSeamTop + ", got=" + page5Restored.getTop() + ")",
+                    Math.abs(bookmarkedSeamTop - page5Restored.getTop()) <= 2);
+
+            // Reopen Bookmarks sheet and delete the bookmark via its delete button
+            topBar.getMenu().performIdentifierAction(R.id.action_toc, 0);
+            Dialog bmDialog2 = ShadowDialog.getLatestDialog();
+            View sheetRoot2 = bmDialog2.findViewById(R.id.sheet_root);
+            sheetRoot2.measure(View.MeasureSpec.makeMeasureSpec(822, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.AT_MOST));
+            sheetRoot2.layout(0, 0, 822, sheetRoot2.getMeasuredHeight());
+            RecyclerView bmList2 = bmDialog2.findViewById(R.id.list);
+            bmList2.getChildAt(0).findViewById(R.id.bm_delete).performClick();
+            assertEquals(View.VISIBLE, bmDialog2.findViewById(R.id.empty).getVisibility());
+            assertEquals(act.getString(R.string.add_bookmark),
+                    topBar.getMenu().findItem(R.id.action_bookmark).getTitle().toString());
+            bmDialog2.dismiss();
+        }
+    }
+
     private static PdfRendererSource.PageRasterizer createWideMarginCroppedRasterizer(int count) {
         // Raw page is 420x594 (A4 = 1.414), but printed text block sits in [90..330, 72..498]
         // (240x426 => cropped aspect ratio ~ 1.775, hugely taller than 1.414 when fitted to width!)

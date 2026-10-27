@@ -464,7 +464,9 @@ public class ReaderActivity extends AppCompatActivity {
             Menu menu = topBar.getMenu();
             MenuItem toc = menu.findItem(R.id.action_toc);
             if (toc != null) {
-                toc.setVisible(session.supportsContents() && !session.contents().isEmpty());
+                boolean hasToc = session.supportsContents() && !session.contents().isEmpty();
+                toc.setVisible(true);
+                toc.setTitle(hasToc ? R.string.navigate : R.string.bookmarks);
                 for (int i = 0; i < menu.size(); i++) tintMenuItem(menu.getItem(i), theme.fg);
             }
         }
@@ -529,9 +531,24 @@ public class ReaderActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------------ navigation
 
+    private float zoomTopY() {
+        return (scrollList instanceof ZoomRecyclerView)
+                ? ((ZoomRecyclerView) scrollList).zoomTopContentY() : 0f;
+    }
+
     private int firstVisiblePage() {
         RecyclerView.LayoutManager manager = scrollList.getLayoutManager();
         if (!(manager instanceof LinearLayoutManager)) return RecyclerView.NO_POSITION;
+        float topY = zoomTopY();
+        if (topY > 0.5f) {
+            for (int i = 0; i < scrollList.getChildCount(); i++) {
+                View child = scrollList.getChildAt(i);
+                if (child.getBottom() > topY) {
+                    int pos = scrollList.getChildAdapterPosition(child);
+                    if (pos != RecyclerView.NO_POSITION) return pos;
+                }
+            }
+        }
         return ((LinearLayoutManager) manager).findFirstVisibleItemPosition();
     }
 
@@ -543,10 +560,13 @@ public class ReaderActivity extends AppCompatActivity {
                 : scrollList.getLayoutManager().findViewByPosition(first);
         int height = (child != null && child.getHeight() > 0) ? child.getHeight() : frameH();
         if (child == null || height <= 0) return 0f;
-        return Math.max(0f, Math.min(0.999f, -child.getTop() / (float) height));
+        return Math.max(0f, Math.min(0.999f, (zoomTopY() - child.getTop()) / height));
     }
 
     private void restoreScroll(int page, float fraction) {
+        if (scrollList instanceof ZoomRecyclerView) {
+            ((ZoomRecyclerView) scrollList).clearZoomForJump();
+        }
         RecyclerView.LayoutManager manager = scrollList.getLayoutManager();
         if (!(manager instanceof LinearLayoutManager)) return;
         int target = clamp(page);
@@ -698,17 +718,25 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     void goToPage(int page) {
+        goToPosition(page, 0f);
+    }
+
+    void goToPosition(int page, float fraction) {
         if (session == null) return;
-        showPage(clamp(page));
+        showPosition(clamp(page), scrollMode ? fraction : 0f);
         persistPosition();
     }
 
     private void showPage(int page) {
+        showPosition(page, 0f);
+    }
+
+    private void showPosition(int page, float fraction) {
         flushAnimations();
         currentPage = page;
-        currentFraction = 0f;
+        currentFraction = Math.max(0f, Math.min(0.999f, fraction));
         session.noteNavigation();
-        if (scrollMode) restoreScroll(currentPage, 0f);
+        if (scrollMode) restoreScroll(currentPage, currentFraction);
         else setPagerPage(currentPage);
         updateChrome();
     }
@@ -737,8 +765,9 @@ public class ReaderActivity extends AppCompatActivity {
 
     private void toggleBookmark() {
         if (session == null) return;
+        syncScrollPosition();
         boolean wasMarked = session.isBookmarked(currentPage);
-        session.toggleBookmark(currentPage);
+        session.toggleBookmark(currentPage, scrollMode ? currentFraction : 0f);
         updateBookmarkIcon();
         Snackbar.make(root, wasMarked ? R.string.bookmark_removed : R.string.bookmark_added,
                 Snackbar.LENGTH_SHORT).show();
@@ -746,7 +775,8 @@ public class ReaderActivity extends AppCompatActivity {
 
     void openNav(int tab) {
         if (session == null) return;
-        new NavSheet(this, session, currentPage, this::goToPage, this::updateBookmarkIcon)
+        syncScrollPosition();
+        new NavSheet(this, session, currentPage, this::goToPosition, this::updateBookmarkIcon)
                 .openOn(tab).show();
     }
 
@@ -804,6 +834,9 @@ public class ReaderActivity extends AppCompatActivity {
             return;
         }
         if (wasScroll != scrollMode) {
+            if (scrollList instanceof ZoomRecyclerView) {
+                ((ZoomRecyclerView) scrollList).clearZoomForJump();
+            }
             currentFraction = 0f;
             if (scrollMode) restoreScroll(currentPage, 0f);
             else setPagerPage(currentPage);
@@ -1069,6 +1102,11 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     private boolean resetVisibleZoom() {
+        if (scrollMode && scrollList instanceof ZoomablePage
+                && ((ZoomablePage) scrollList).isZoomed()) {
+            ((ZoomablePage) scrollList).resetZoom();
+            return true;
+        }
         RecyclerView list = scrollMode ? scrollList : pagerList();
         if (list == null) return false;
         for (int i = 0; i < list.getChildCount(); i++) {

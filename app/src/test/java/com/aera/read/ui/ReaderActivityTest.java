@@ -179,7 +179,7 @@ public class ReaderActivityTest {
     }
 
     @Test
-    public void booksWithoutAContentsListHideTheContentsAction() throws Exception {
+    public void booksWithoutAContentsListOpenBookmarksDirectlyFromToolbar() throws Exception {
         Book book = TestSupport.installFile(app, TestSupport.writeEpubWithCover(app,
                 "No Contents Book", 600, 900, 80, 80, 520, 820, android.graphics.Color.GRAY),
                 "no-toc.epub");
@@ -187,10 +187,11 @@ public class ReaderActivityTest {
             ReaderActivity activity = TestSupport.currentActivity(scenario);
             MaterialToolbar bar = activity.findViewById(R.id.top_bar);
             assertTrue(activity.getSession().contents().isEmpty());
-            assertFalse("no empty contents destination",
-                    bar.getMenu().findItem(R.id.action_toc).isVisible());
+            android.view.MenuItem navItem = bar.getMenu().findItem(R.id.action_toc);
+            assertTrue("bookmarks list remains reachable from toolbar", navItem.isVisible());
+            assertEquals(activity.getString(R.string.bookmarks), navItem.getTitle().toString());
 
-            activity.runOnUiThread(() -> activity.openNav(0));
+            activity.runOnUiThread(() -> bar.getMenu().performIdentifierAction(R.id.action_toc, 0));
             TestSupport.idle();
             BottomSheetDialog sheet = (BottomSheetDialog) ShadowDialog.getLatestDialog();
             assertNotNull(sheet);
@@ -504,7 +505,8 @@ public class ReaderActivityTest {
             MaterialToolbar bar = activity.findViewById(R.id.top_bar);
             android.view.MenuItem toc = bar.getMenu().findItem(R.id.action_toc);
             assertNotNull(toc);
-            assertFalse("PDFs have no contents", toc.isVisible());
+            assertTrue("PDFs keep toolbar navigation visible to view Bookmarks", toc.isVisible());
+            assertEquals(activity.getString(R.string.bookmarks), toc.getTitle().toString());
             assertTrue(bar.getMenu().findItem(R.id.action_appearance).isVisible());
 
             TextView pageLabel = activity.findViewById(R.id.page_label);
@@ -560,18 +562,23 @@ public class ReaderActivityTest {
         Book book = TestSupport.install(app, "meditations.epub");
         try (ActivityScenario<ReaderActivity> scenario = open(book)) {
             ReaderActivity activity = TestSupport.currentActivity(scenario);
-            android.view.ViewGroup list = activity.findViewById(R.id.scroll_list);
+            ZoomRecyclerView list = activity.findViewById(R.id.scroll_list);
             TestSupport.waitUntil(() -> pageIn(list) != null, 5000,
                     "the scrolling list must lay its pages out");
             PageView page = pageIn(list);
+            assertFalse(list.isZoomed());
             assertFalse(page.isZoomed());
 
             pinch(activity);
-            assertTrue("two fingers magnify a page in scroll mode", page.isZoomed());
+            assertTrue("two fingers magnify the whole scroll viewport", list.isZoomed());
+            assertFalse("individual page item is not isolated inside its own box", page.isZoomed());
             int before = activity.getCurrentPage();
+            boolean chromeBefore = activity.isChromeVisible();
 
             tap(activity, 0.5f, 0.5f);
-            assertFalse("a tap puts the page back to fit", page.isZoomed());
+            assertFalse("a tap puts the scroll viewport back to fit", list.isZoomed());
+            assertEquals("and it does not toggle chrome", chromeBefore,
+                    activity.isChromeVisible());
             assertEquals("and it does not also turn the page", before,
                     activity.getCurrentPage());
         }

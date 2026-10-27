@@ -37,6 +37,7 @@ public class ZoomImageView extends View implements ZoomablePage, ZoomController.
 
     private float scale = 1f;
     private float baseScale = 1f;
+    private float externalZoom = 1f;
     private float tx;
     private float ty;
     private final boolean parentScrolls;
@@ -151,6 +152,7 @@ public class ZoomImageView extends View implements ZoomablePage, ZoomController.
             }
         }
         resetTransform();
+        if (externalZoom > 1.02f) reportZoom();
         invalidate();
     }
 
@@ -239,11 +241,20 @@ public class ZoomImageView extends View implements ZoomablePage, ZoomController.
     public void setZoomListener(ZoomListener listener) {
         zoomListener = listener;
         reportedLevel = 1;
+        if (externalZoom > 1.02f) reportZoom();
+    }
+
+    public void setExternalZoom(float external) {
+        float clamped = Math.max(1f, Math.min(4f, external));
+        if (Math.abs(clamped - externalZoom) < 0.01f) return;
+        externalZoom = clamped;
+        reportZoom();
     }
 
     private void reportZoom() {
         if (zoomListener == null) return;
-        int level = Math.max(1, Math.min(4, (int) Math.ceil(scale / baseScale - 0.02f)));
+        float ratio = (scale / Math.max(0.001f, baseScale)) * externalZoom;
+        int level = Math.max(1, Math.min(4, (int) Math.ceil(ratio - 0.02f)));
         if (level == reportedLevel) return;
         reportedLevel = level;
         zoomListener.onRenderScaleChanged(level);
@@ -370,6 +381,7 @@ public class ZoomImageView extends View implements ZoomablePage, ZoomController.
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (getParent() instanceof ZoomRecyclerView) return false;
         if (bitmap == null) return false;
         return zoom.onTouchEvent(event);
     }

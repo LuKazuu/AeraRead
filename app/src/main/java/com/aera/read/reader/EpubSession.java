@@ -324,14 +324,20 @@ public class EpubSession implements ReadingSession {
 
     @Override
     public void toggleBookmark(int page) {
+        toggleBookmark(page, 0f);
+    }
+
+    @Override
+    public void toggleBookmark(int page, float fraction) {
         if (pages == null) return;
         PagedBook.Page p = pages.page(page);
         Bookmark existing = findBookmark(p);
         if (existing != null) {
             Library.removeBookmark(ctx, book.id(), existing);
         } else {
+            float clampedFraction = Math.max(0f, Math.min(0.999f, fraction));
             Library.addBookmark(ctx, book.id(), new Bookmark(bookmarkTitle(page), p.chapter,
-                    p.startOffset, System.currentTimeMillis()));
+                    p.startOffset, clampedFraction, System.currentTimeMillis()));
         }
     }
 

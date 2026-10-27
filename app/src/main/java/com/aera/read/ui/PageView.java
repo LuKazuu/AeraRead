@@ -24,6 +24,7 @@ public class PageView extends View implements ZoomablePage, ZoomController.Host 
     private PagedBook book;
     private PagedBook.Page page;
     private float scale = 1f;
+    private float externalZoom = 1f;
     private float tx;
     private float ty;
     private final ZoomController zoom;
@@ -84,8 +85,17 @@ public class PageView extends View implements ZoomablePage, ZoomController.Host 
         invalidate();
     }
 
+    public void setExternalZoom(float external) {
+        float clamped = Math.max(1f, Math.min(MAX_ZOOM, external));
+        if (Math.abs(clamped - externalZoom) < 0.01f) return;
+        externalZoom = clamped;
+        preloadImages();
+        invalidate();
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (getParent() instanceof ZoomRecyclerView) return false;
         return zoom.onTouchEvent(event);
     }
 
@@ -109,12 +119,13 @@ public class PageView extends View implements ZoomablePage, ZoomController.Host 
     private void preloadImages() {
         if (images == null || book == null || page == null || getWidth() == 0) return;
         float contentW = getWidth() - getPaddingLeft() - getPaddingRight();
+        int step = Math.max(1, (int) Math.ceil(Math.min(MAX_ZOOM, scale * externalZoom) - 0.01f));
         for (PagedBook.Segment seg : page.segments) {
             if (seg.isImage()) {
                 images.request(seg.block.imagePath, bitmapWidthFor(seg, contentW), invalidateSelf);
             } else if (seg.block != null && seg.block.inlineImages != null) {
                 for (EpubBook.InlineImage img : seg.block.inlineImages) {
-                    int reqW = Math.min(Math.max(48, img.imgW), MAX_IMAGE_WIDTH);
+                    int reqW = Math.min(Math.max(48, img.imgW) * step, MAX_IMAGE_WIDTH);
                     images.request(img.path, reqW, invalidateSelf);
                 }
             }
@@ -152,7 +163,8 @@ public class PageView extends View implements ZoomablePage, ZoomController.Host 
         canvas.translate(padL, padT);
 
         book.styles.setColor(theme.fg);
-        InlineImageSpan.bindHost(images, invalidateSelf, theme, scale);
+        float effectiveScale = Math.min(MAX_ZOOM, scale * externalZoom);
+        InlineImageSpan.bindHost(images, invalidateSelf, theme, effectiveScale);
         try {
             for (PagedBook.Segment seg : page.segments) {
                 if (seg.isImage()) drawImage(canvas, seg, contentW);
@@ -175,7 +187,8 @@ public class PageView extends View implements ZoomablePage, ZoomController.Host 
 
     int bitmapWidthFor(PagedBook.Segment seg, float contentW) {
         int drawW = layoutWidth(seg, contentW);
-        int step = Math.max(1, (int) Math.ceil(scale - 0.01f));
+        float effectiveScale = Math.min(MAX_ZOOM, scale * externalZoom);
+        int step = Math.max(1, (int) Math.ceil(effectiveScale - 0.01f));
         return Math.min(drawW * step, MAX_IMAGE_WIDTH);
     }
 

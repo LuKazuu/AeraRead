@@ -447,9 +447,15 @@ public class PdfSession implements ReadingSession {
 
     @Override
     public void toggleBookmark(int page) {
+        toggleBookmark(page, 0f);
+    }
+
+    @Override
+    public void toggleBookmark(int page, float fraction) {
+        int target = clamp(page);
         Bookmark existing = null;
         for (Bookmark bm : Library.bookmarks(ctx, book.id())) {
-            if (bm.chapter == -1 && bm.offset == page) {
+            if (bm.chapter == -1 && bm.offset == target) {
                 existing = bm;
                 break;
             }
@@ -457,8 +463,10 @@ public class PdfSession implements ReadingSession {
         if (existing != null) {
             Library.removeBookmark(ctx, book.id(), existing);
         } else {
+            float clampedFraction = Math.max(0f, Math.min(0.999f, fraction));
             Library.addBookmark(ctx, book.id(),
-                    new Bookmark(bookmarkTitle(page), -1, page, System.currentTimeMillis()));
+                    new Bookmark(bookmarkTitle(target), -1, target, clampedFraction,
+                            System.currentTimeMillis()));
         }
     }
 
