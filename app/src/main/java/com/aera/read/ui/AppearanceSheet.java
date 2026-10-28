@@ -83,6 +83,11 @@ public class AppearanceSheet {
         if (supportsTypography) buildTypography(root);
         if (supportsViewMode) buildLayout(root);
 
+        MaterialSwitch tapToTurn = root.findViewById(R.id.tap_to_turn);
+        tapToTurn.setChecked(prefs.tapToTurn);
+        tapToTurn.setOnCheckedChangeListener(
+                (buttonView, isChecked) -> applyTapToTurn(isChecked));
+
         MaterialSwitch keepOn = root.findViewById(R.id.keep_on);
         keepOn.setChecked(prefs.keepScreenOn);
         keepOn.setOnCheckedChangeListener((buttonView, isChecked) -> applyKeepScreenOn(isChecked));
@@ -279,6 +284,17 @@ public class AppearanceSheet {
     void applyDirection(String direction) {
         if (prefs.direction.equals(direction)) return;
         prefs.direction = direction;
+        prefs.save();
+        callback.onAppearanceChanged(false);
+    }
+
+    /**
+     * Toggles the opt-in edge tap zones. Applies to Pages and Scroll mode alike; the reader
+     * picks the new value up through {@code onAppearanceChanged} without a relayout.
+     */
+    void applyTapToTurn(boolean enabled) {
+        if (prefs.tapToTurn == enabled) return;
+        prefs.tapToTurn = enabled;
         prefs.save();
         callback.onAppearanceChanged(false);
     }

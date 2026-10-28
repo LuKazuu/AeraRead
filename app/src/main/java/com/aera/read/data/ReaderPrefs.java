@@ -23,6 +23,8 @@ public final class ReaderPrefs {
     public boolean pdfFullTheme = true;
     public String pdfTrim = TRIM_NORMAL; // "off" | "normal" | "max"
     public boolean keepScreenOn = false;
+    /** Edge tap zones turn pages / scroll the view. Opt-in; default off (v1.1.2). */
+    public boolean tapToTurn = false;
 
     private final SharedPreferences sp;
 
@@ -37,6 +39,7 @@ public final class ReaderPrefs {
         pdfFullTheme = sp.getBoolean("pdf_full_theme", pdfFullTheme);
         pdfTrim = normalizeTrim(sp.getString("pdf_trim", pdfTrim));
         keepScreenOn = sp.getBoolean("keep_on", keepScreenOn);
+        tapToTurn = sp.getBoolean("tap_to_turn", tapToTurn);
     }
 
     public static String normalizeTrim(String mode) {
@@ -68,6 +71,7 @@ public final class ReaderPrefs {
                 .putBoolean("pdf_full_theme", pdfFullTheme)
                 .putString("pdf_trim", normalizeTrim(pdfTrim))
                 .putBoolean("keep_on", keepScreenOn)
+                .putBoolean("tap_to_turn", tapToTurn)
                 .apply();
     }
 }

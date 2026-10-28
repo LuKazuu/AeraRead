@@ -327,6 +327,15 @@
         </LinearLayout>
 
         <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/tap_to_turn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:minHeight="48dp"
+            android:text="@string/tap_to_turn"
+            android:textAppearance="@style/TextAppearance.Aera.ItemTitle" />
+
+        <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/keep_on"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

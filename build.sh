@@ -2,8 +2,8 @@
 # Aera Read — local and CI APK build script.
 #
 #   ./build.sh                 interactive menu (in a terminal)
-#   ./build.sh apk             build R8-optimized APK only -> ./AeraRead-1.1.apk
-#   ./build.sh release [tag]   build APK, tag commit (default v1.1), publish if gh is installed
+#   ./build.sh apk             build R8-optimized APK only -> ./AeraRead-1.1.2.apk
+#   ./build.sh release [tag]   build APK, tag commit (default v1.1.2), publish if gh is installed
 #   ./build.sh test            run unit tests
 #   ./build.sh lint            run Android lint
 #   ./build.sh clean           delete build outputs
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 GRADLEW=./gradlew
-APK_OUT=AeraRead-1.1.apk
+APK_OUT=AeraRead-1.1.2.apk
 
 if [[ -z "${JAVA_HOME:-}" ]] && ! command -v java >/dev/null 2>&1; then
   echo "build.sh: set JAVA_HOME to JDK 17+" >&2
@@ -48,8 +48,8 @@ if [[ $# -eq 0 ]]; then
     case "${choice:-1}" in
       2)
         CMD=release
-        read -r -p "Release tag [v1.1]: " tag_input
-        TAG="${tag_input:-v1.1}"
+        read -r -p "Release tag [v1.1.2]: " tag_input
+        TAG="${tag_input:-v1.1.2}"
         ;;
       *)
         CMD=apk
@@ -74,7 +74,7 @@ case "$CMD" in
     build_apk "$@"
     ;;
   release)
-    TAG="${TAG:-v1.1}"
+    TAG="${TAG:-v1.1.2}"
     build_apk "$@"
     if git rev-parse --git-dir >/dev/null 2>&1; then
       git tag -f -a "$TAG" -m "Aera Read $TAG"

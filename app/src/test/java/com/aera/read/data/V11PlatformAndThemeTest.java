@@ -38,7 +38,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * Verifies v1.1 platform target/min SDK metadata, Light theme replacement (zero effects),
+ * Verifies v1.1.2 platform target/min SDK metadata, Light theme replacement (zero effects),
  * PDF full-theme preference persistence, CoverImageView 3:4 geometry without ConstraintLayout,
  * and ZipArchive multi-chunk stored/deflated stream integrity.
  */
@@ -47,15 +47,15 @@ import java.util.zip.ZipOutputStream;
 public class V11PlatformAndThemeTest {
 
     @Test
-    public void manifestTargetsAndroid9ThroughAndroid17AtVersion11() throws Exception {
+    public void manifestTargetsAndroid9ThroughAndroid17AtVersion112() throws Exception {
         Application app = ApplicationProvider.getApplicationContext();
         ApplicationInfo appInfo = app.getApplicationInfo();
         PackageInfo pkgInfo = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
 
         assertEquals("minSdk must be Android 9 (API 28)", 28, appInfo.minSdkVersion);
         assertEquals("targetSdk must be Android 17 (API 37)", 37, appInfo.targetSdkVersion);
-        assertEquals("1.1", pkgInfo.versionName);
-        assertEquals(2L, pkgInfo.getLongVersionCode());
+        assertEquals("1.1.2", pkgInfo.versionName);
+        assertEquals(3L, pkgInfo.getLongVersionCode());
     }
 
     @Test

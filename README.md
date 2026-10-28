@@ -29,7 +29,8 @@ trimming and hardware-accelerated full-page theming.
 - System font by default; 15 Latin and 7 CJK Google Fonts available via **Manage** inside Appearance
 - Text size 14–30 sp (default 18 sp), line spacing 125–190% applied live while dragging
 - Reading themes: **Light** (pure, zero effects), **Sepia**, **Slate**, **Night**
-- Scroll mode or Pages mode (L/R or R/L), tap zones, progress slider, chapter contents, and character-anchored bookmarks
+- Scroll mode or Pages mode (L/R or R/L), progress slider, chapter contents, and character-anchored bookmarks
+- **Tap left/right to turn pages** — opt-in Appearance switch (off by default) enabling left/right edge taps in both Pages and Scroll mode; a Scroll-mode tap advances 60% of the viewport so the previous lines stay in view. With the switch off, every tap on the page simply toggles the toolbars
 
 ## Project layout
 
@@ -51,13 +52,13 @@ Requires JDK 17+ (JDK 21 recommended) and Android SDK (`platforms;android-37.0`,
 
 ```bash
 bash build.sh                 # interactive menu: 1) APK only  2) Release (build + tag)
-bash build.sh apk             # compile signed R8-optimized AeraRead-1.1.apk
-bash build.sh release v1.1    # compile APK and create git release tag
+bash build.sh apk             # compile signed R8-optimized AeraRead-1.1.2.apk
+bash build.sh release v1.1.2   # compile APK and create git release tag
 bash build.sh test            # run Robolectric Native Graphics test suite
 bash build.sh lint            # run Android lint
 bash build.sh clean           # delete build outputs
 ```
 
 GitHub Actions (`.github/workflows/build.yml`) runs manually via `workflow_dispatch`:
-- **Actions only** — compiles `AeraRead-1.1.apk` and uploads it as a workflow artifact.
-- **Release** — compiles `AeraRead-1.1.apk`, uploads the workflow artifact, tags the commit, and publishes a GitHub Release.
+- **Actions only** — compiles `AeraRead-1.1.2.apk` and uploads it as a workflow artifact.
+- **Release** — compiles `AeraRead-1.1.2.apk`, uploads the workflow artifact, tags the commit, and publishes a GitHub Release.

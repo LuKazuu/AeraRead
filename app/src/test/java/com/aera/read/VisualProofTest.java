@@ -16,6 +16,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.util.Base64;
 import android.view.ContextThemeWrapper;
+import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -78,8 +79,10 @@ public class VisualProofTest {
         File themePng = renderPdfThemesAndSheetProof(app, new File(outDir, "04-pdf-themes-and-appearance.png"));
         File pdfScrollPng = renderPdfScrollAndToolbarSheetProof(
                 app, new File(outDir, "05-pdf-scroll-and-viewmode.png"));
+        File tapZonesPng = renderTapZonesAndScrollStepProof(
+                app, new File(outDir, "06-tap-zones-and-scroll-step-v1.1.2.png"));
 
-        for (File f : new File[]{libPng, epubPng, cropPng, themePng, pdfScrollPng}) {
+        for (File f : new File[]{libPng, epubPng, cropPng, themePng, pdfScrollPng, tapZonesPng}) {
             assertTrue("Proof screenshot must exist: " + f, f.isFile() && f.length() > 4096);
             Bitmap decoded = BitmapFactory.decodeFile(f.getAbsolutePath());
             assertNotNull("Proof PNG must decode cleanly: " + f, decoded);
@@ -460,6 +463,199 @@ public class VisualProofTest {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /**
+     * v1.1.2 proof: the opt-in "Tap left/right to turn pages" switch inside the real Appearance
+     * sheet (OFF default vs ON), and the real EPUB scroll-mode reader showing exactly how
+     * far one enabled edge tap travels — the new reduced 60% step next to the old 85%
+     * jump reproduced from the same starting offset for direct comparison.
+     */
+    private static File renderTapZonesAndScrollStepProof(Application app, File dest)
+            throws Exception {
+        TestSupport.clearLibrary(app);
+        ReaderPrefs init = new ReaderPrefs(app);
+        init.theme = "light";
+        init.viewMode = "scroll";
+        init.direction = "ltr";
+        init.font = "system";
+        init.tapToTurn = true; // gesture enabled so the edge tap actually navigates
+        init.save();
+
+        Book epub = TestSupport.install(app, "meditations.epub");
+        android.content.Intent intent =
+                new android.content.Intent(app, com.aera.read.ui.ReaderActivity.class);
+        intent.putExtra(com.aera.read.ui.ReaderActivity.EXTRA_BOOK_ID, epub.id());
+
+        try (ActivityController<com.aera.read.ui.ReaderActivity> ctrl =
+                     Robolectric.buildActivity(com.aera.read.ui.ReaderActivity.class, intent)
+                             .setup()) {
+            com.aera.read.ui.ReaderActivity act = ctrl.get();
+            TestSupport.waitUntil(
+                    () -> act.findViewById(R.id.loading).getVisibility() == View.GONE,
+                    8000, "open epub");
+
+            // --- Appearance sheet: new switch OFF (default) and ON ---------------
+            ReaderPrefs offPrefs = new ReaderPrefs(app);
+            offPrefs.tapToTurn = false;
+            offPrefs.save();
+            act.runOnUiThread(() -> act.recreatePrefsForTest());
+            TestSupport.idle();
+            Bitmap sheetOff = renderAppearanceSheetCrop(act);
+
+            ReaderPrefs onPrefs = new ReaderPrefs(app);
+            onPrefs.tapToTurn = true;
+            onPrefs.save();
+            act.runOnUiThread(() -> act.recreatePrefsForTest());
+            TestSupport.idle();
+            Bitmap sheetOn = renderAppearanceSheetCrop(act);
+
+            // --- Real reader: before tap / after tap (60%) / old jump (85%) -------
+            View readerRoot = act.findViewById(R.id.reader_root);
+            measureReader(readerRoot);
+            settle(30);
+            measureReader(readerRoot);
+            androidx.recyclerview.widget.RecyclerView rv = act.findViewById(R.id.scroll_list);
+            rv.scrollToPosition(0);
+            settle(10);
+            Bitmap beforeBmp = renderReaderRoot(readerRoot);
+            int offsetBefore = rv.computeVerticalScrollOffset();
+
+            // One real right-edge tap, exactly like a finger would deliver.
+            long now = android.os.SystemClock.uptimeMillis();
+            float tapX = readerRoot.getWidth() * 0.92f;
+            float tapY = readerRoot.getHeight() * 0.5f;
+            MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN,
+                    tapX, tapY, 0);
+            MotionEvent up = MotionEvent.obtain(now, now + 25, MotionEvent.ACTION_UP,
+                    tapX, tapY, 0);
+            act.dispatchTouchEvent(down);
+            act.dispatchTouchEvent(up);
+            down.recycle();
+            up.recycle();
+            settle(40); // let the 180 ms hardware-VSYNC glide finish
+            Bitmap afterBmp = renderReaderRoot(readerRoot);
+            int offsetAfter = rv.computeVerticalScrollOffset();
+
+            int frameH = act.findViewById(R.id.content_frame).getHeight();
+            int newStep = (int) (frameH * com.aera.read.ui.ReaderActivity.TAP_SCROLL_FRACTION);
+            int oldStep = (int) (frameH * 0.85f);
+            assertTrue("the rendered proof must show the exact reduced 60% tap step",
+                    offsetAfter - offsetBefore == newStep);
+            // Reproduce the OLD v1.1 distance from the same starting offset.
+            rv.scrollBy(0, oldStep - newStep);
+            settle(10);
+            Bitmap oldBmp = renderReaderRoot(readerRoot);
+            int offsetOld = rv.computeVerticalScrollOffset();
+            assertTrue("the rendered proof must show the exact old 85% distance",
+                    offsetOld - offsetBefore == oldStep);
+
+            // --- compose ----------------------------------------------------------
+            int panelW = 540;
+            int panelH = Math.round(beforeBmp.getHeight() * (panelW / (float) beforeBmp.getWidth()));
+            Bitmap before = Bitmap.createScaledBitmap(beforeBmp, panelW, panelH, true);
+            Bitmap after = Bitmap.createScaledBitmap(afterBmp, panelW, panelH, true);
+            Bitmap old = Bitmap.createScaledBitmap(oldBmp, panelW, panelH, true);
+
+            int sheetW = 820;
+            int sheetOffH = Math.round(sheetOff.getHeight() * (sheetW / (float) sheetOff.getWidth()));
+            int sheetOnH = Math.round(sheetOn.getHeight() * (sheetW / (float) sheetOn.getWidth()));
+            Bitmap sheetOffS = Bitmap.createScaledBitmap(sheetOff, sheetW, sheetOffH, true);
+            Bitmap sheetOnS = Bitmap.createScaledBitmap(sheetOn, sheetW, sheetOnH, true);
+
+            int pad = 28;
+            int headerH = 64;
+            int rowGap = 56;
+            int outW = pad * 4 + panelW * 3;
+            int outH = headerH + panelH + rowGap + headerH
+                    + Math.max(sheetOffH, sheetOnH) + pad;
+            Bitmap combined = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(combined);
+            c.drawColor(0xFF0F172A);
+            Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            titlePaint.setColor(Color.WHITE);
+            titlePaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+            titlePaint.setTextSize(22f);
+            Paint rowPaint = new Paint(titlePaint);
+            rowPaint.setTextSize(17f);
+
+            int y1 = headerH;
+            drawLabeledPanel(c, rowPaint, "1. Before tap (offset " + offsetBefore + ")",
+                    before, pad, y1);
+            drawLabeledPanel(c, rowPaint,
+                    "2. NEW v1.1.2: +" + (offsetAfter - offsetBefore) + "px (60% step)",
+                    after, pad * 2 + panelW, y1);
+            drawLabeledPanel(c, rowPaint,
+                    "3. OLD v1.1: +" + (offsetOld - offsetBefore) + "px (85%, too far)",
+                    old, pad * 3 + panelW * 2, y1);
+
+            int y2 = y1 + panelH + rowGap + headerH - 12;
+            drawLabeledPanel(c, titlePaint,
+                    "4. Appearance — “Tap left/right to turn pages” OFF (default)",
+                    sheetOffS, pad, y2 + 12);
+            drawLabeledPanel(c, titlePaint,
+                    "5. Switch ON — works in Pages & Scroll mode",
+                    sheetOnS, pad * 2 + sheetW, y2 + 12);
+            savePng(combined, dest);
+        } finally {
+            init.theme = "light";
+            init.viewMode = "pages";
+            init.direction = "ltr";
+            init.tapToTurn = false;
+            init.save();
+            TestSupport.clearLibrary(app);
+        }
+        return dest;
+    }
+
+    /** Opens the real Appearance sheet through the toolbar and crops the settings tail. */
+    private static Bitmap renderAppearanceSheetCrop(
+            com.aera.read.ui.ReaderActivity act) {
+        com.google.android.material.appbar.MaterialToolbar topBar =
+                act.findViewById(R.id.top_bar);
+        topBar.getMenu().performIdentifierAction(R.id.action_appearance, 0);
+        Dialog dialog = ShadowDialog.getLatestDialog();
+        View sheetRoot = dialog.findViewById(R.id.sheet_root);
+        sheetRoot.measure(View.MeasureSpec.makeMeasureSpec(822, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int fullH = sheetRoot.getMeasuredHeight();
+        sheetRoot.layout(0, 0, 822, fullH);
+        Bitmap full = Bitmap.createBitmap(822, fullH, Bitmap.Config.ARGB_8888);
+        Canvas sc = new Canvas(full);
+        sc.drawColor(0xFFF7FAF4);
+        sheetRoot.draw(sc);
+        dialog.dismiss();
+
+        // Crop from the "View mode" section down: switch + caption + keep-screen-on.
+        View layoutSection = sheetRoot.findViewById(R.id.layout_section);
+        int cropTop = Math.max(0, (layoutSection != null ? layoutSection.getTop() : fullH / 2) - 34);
+        int cropH = Math.min(fullH - cropTop, fullH);
+        return Bitmap.createBitmap(full, 0, cropTop, 822, cropH);
+    }
+
+    private static void measureReader(View readerRoot) {
+        readerRoot.measure(View.MeasureSpec.makeMeasureSpec(822, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(1480, View.MeasureSpec.EXACTLY));
+        readerRoot.layout(0, 0, 822, 1480);
+    }
+
+    private static Bitmap renderReaderRoot(View readerRoot) {
+        Bitmap bmp = Bitmap.createBitmap(822, 1480, Bitmap.Config.ARGB_8888);
+        readerRoot.draw(new Canvas(bmp));
+        return bmp;
+    }
+
+    /** Drives real Choreographer vsync frames (same mechanism PageTurnTest uses). */
+    private static void settle(int frames) {
+        for (int i = 0; i < frames; i++) {
+            boolean[] fired = {false};
+            android.view.Choreographer.getInstance().postFrameCallback(ns -> fired[0] = true);
+            int guard = 0;
+            while (!fired[0] && guard++ < 5000) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).runOneTask();
+            }
+        }
+        TestSupport.idle();
+    }
 
     private static Bitmap renderPdfPanel(Application app, Bitmap page, ReaderTheme theme,
                                          boolean fullPage, int w, int h) {

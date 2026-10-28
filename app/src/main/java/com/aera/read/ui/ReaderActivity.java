@@ -59,6 +59,13 @@ public class ReaderActivity extends AppCompatActivity {
     private static final long FIRST_FRAME_LEAD_NS = 16_000_000L;
     private static final long PREVIEW_INTERVAL_MS = 90;
 
+    /**
+     * Fraction of the viewport a single edge tap advances in Scroll mode.
+     * v1.1.2: reduced from 0.85 (which jumped too far and lost reading context)
+     * to 0.60, keeping a 40% overlap of the previous screen.
+     */
+    public static final float TAP_SCROLL_FRACTION = 0.60f;
+
     private Book book;
     private ReaderPrefs prefs;
     private ReaderTheme theme;
@@ -585,7 +592,7 @@ public class ReaderActivity extends AppCompatActivity {
     private void turnPage(int delta) {
         if (session == null) return;
         if (scrollMode) {
-            int dy = (int) (frameH() * 0.85f);
+            int dy = (int) (frameH() * TAP_SCROLL_FRACTION);
             navTicks++;
             session.noteNavigation();
             scrollList.stopScroll();
@@ -1089,6 +1096,13 @@ public class ReaderActivity extends AppCompatActivity {
         float width = contentFrame.getWidth();
         if (width <= 0) return;
         if (resetVisibleZoom()) return;
+        // v1.1.2: edge tap zones are opt-in (ReaderPrefs.tapToTurn, default off).
+        // With the gesture disabled every content tap simply toggles the chrome,
+        // identically in Pages and Scroll mode.
+        if (!prefs.tapToTurn) {
+            setChromeVisible(!chromeVisible);
+            return;
+        }
         if (scrollMode) {
             if (x < width * 0.30f) turnPage(-1);
             else if (x > width * 0.70f) turnPage(1);
@@ -1176,6 +1190,11 @@ public class ReaderActivity extends AppCompatActivity {
 
     void turnPageForwardForTest() {
         turnPage(1);
+    }
+
+    /** Test hook: reload reading preferences from storage, as onAppearanceChanged does. */
+    public void recreatePrefsForTest() {
+        prefs = new ReaderPrefs(this);
     }
 
     public boolean isChromeVisible() {

@@ -359,6 +359,7 @@ public class ReaderActivityTest {
 
     @Test
     public void tappingTheEdgesTurnsPages() throws Exception {
+        enableTapZones();
         Book book = TestSupport.install(app, "alice.epub");
         try (ActivityScenario<ReaderActivity> scenario = open(book)) {
             ReaderActivity activity = TestSupport.currentActivity(scenario);
@@ -533,6 +534,13 @@ public class ReaderActivityTest {
         void bind(androidx.recyclerview.widget.RecyclerView.ViewHolder holder, int position) {
             raw.bindViewHolder(holder, position);
         }
+    }
+
+    /** Edge tap zones are opt-in since v1.1.2; enable them for gesture-driven tests. */
+    private void enableTapZones() {
+        ReaderPrefs prefs = new ReaderPrefs(app);
+        prefs.tapToTurn = true;
+        prefs.save();
     }
 
     private void tap(ReaderActivity activity, float xFraction, float yFraction) {

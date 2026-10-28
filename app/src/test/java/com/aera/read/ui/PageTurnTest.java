@@ -50,6 +50,8 @@ public class PageTurnTest {
         prefs.font = "system";
         prefs.sizeSp = 18;
         prefs.linePct = 155;
+        // Edge tap zones are opt-in since v1.1.2; this suite exercises them explicitly.
+        prefs.tapToTurn = true;
         prefs.save();
     }
 
@@ -308,7 +310,7 @@ public class PageTurnTest {
         try {
             ReaderActivity activity = open(book, ref);
             RecyclerView list = activity.findViewById(R.id.scroll_list);
-            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * 0.85f);
+            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * ReaderActivity.TAP_SCROLL_FRACTION);
             assertTrue("non-trivial scroll step", step > 500);
 
             int before = list.computeVerticalScrollOffset();
@@ -351,7 +353,7 @@ public class PageTurnTest {
             RecyclerView list = activity.findViewById(R.id.scroll_list);
             activity.runOnUiThread(() -> activity.goToPage(12));
             TestSupport.idle();
-            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * 0.85f);
+            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * ReaderActivity.TAP_SCROLL_FRACTION);
             int startOffset = list.computeVerticalScrollOffset();
             assertTrue("started well down the book", startOffset >= 10 * step);
 
@@ -410,7 +412,7 @@ public class PageTurnTest {
         try {
             ReaderActivity activity = open(book, ref);
             RecyclerView list = activity.findViewById(R.id.scroll_list);
-            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * 0.85f);
+            int step = (int) (activity.findViewById(R.id.content_frame).getHeight() * ReaderActivity.TAP_SCROLL_FRACTION);
 
             activity.runOnUiThread(() -> list.smoothScrollBy(0, 4000));
             int baseline = list.computeVerticalScrollOffset();
