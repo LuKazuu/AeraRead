@@ -226,16 +226,32 @@ public final class ZipArchive implements Closeable {
     private void readCentralDirectory() throws IOException {
         long size = source.size();
         if (size < 22) throw new IOException("Not a zip file");
-        int tailLen = (int) Math.min(size, 22 + 0xFFFF);
+        // Some EPUB producers append zero padding after the ZIP end record. Allow up to
+        // 64 KiB of padding in addition to the maximum ZIP comment, without accepting
+        // arbitrary trailing data or accidentally treating a signature in it as the EOCD.
+        int tailLen = (int) Math.min(size, 22L + 0xFFFF + 0x10000);
         byte[] tail = readFully(size - tailLen, tailLen);
+        int lastNonZero = tailLen - 1;
+        while (lastNonZero >= 0 && tail[lastNonZero] == 0) lastNonZero--;
         int eocd = -1;
         for (int i = tailLen - 22; i >= 0; i--) {
             if (u32(tail, i) == EOCD_SIG) {
                 int commentLen = u16(tail, i + 20);
-                if (i + 22 + commentLen == tailLen) {
-                    eocd = i;
-                    break;
+                int end = i + 22 + commentLen;
+                if (end > tailLen || tailLen - end > 0x10000 || end <= lastNonZero) continue;
+                long candidateOffset = u32(tail, i + 16);
+                long candidateSize = u32(tail, i + 12);
+                long recordOffset = size - tailLen + i;
+                boolean zip64Candidate = u16(tail, i + 10) == 0xFFFF
+                        || candidateOffset == 0xFFFFFFFFL || candidateSize == 0xFFFFFFFFL;
+                if (!zip64Candidate) {
+                    if (u16(tail, i + 10) == 0 || candidateSize < 46
+                            || candidateOffset > recordOffset
+                            || candidateSize > recordOffset - candidateOffset) continue;
+                    if (u32(readFully(candidateOffset, 4), 0) != CEN_SIG) continue;
                 }
+                eocd = i;
+                break;
             }
         }
         if (eocd < 0) throw new IOException("Missing zip directory");

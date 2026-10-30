@@ -54,7 +54,7 @@ public class V11PlatformAndThemeTest {
 
         assertEquals("minSdk must be Android 9 (API 28)", 28, appInfo.minSdkVersion);
         assertEquals("targetSdk must be Android 17 (API 37)", 37, appInfo.targetSdkVersion);
-        assertEquals("1.1.2", pkgInfo.versionName);
+        assertEquals("1.2", pkgInfo.versionName);
         assertEquals(3L, pkgInfo.getLongVersionCode());
     }
 

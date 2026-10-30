@@ -126,6 +126,52 @@ public class ZipArchiveTest {
         }
     }
 
+    @Test
+    public void readsEpubWithZeroPaddingAfterEndRecordAndComment() throws Exception {
+        for (int padding : new int[]{0, 25, 65536}) {
+            File file = File.createTempFile("padded-epub", ".epub");
+            try {
+                try (ZipOutputStream out = new ZipOutputStream(new java.io.FileOutputStream(file))) {
+                    out.setComment("archive comment");
+                    out.putNextEntry(new ZipEntry("META-INF/container.xml"));
+                    out.write("container".getBytes(StandardCharsets.UTF_8));
+                    out.closeEntry();
+                }
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+                    out.write(new byte[padding]);
+                }
+                try (ZipArchive zip = open(new FileSource(file))) {
+                    assertEquals("container", new String(zip.read("META-INF/container.xml"),
+                            StandardCharsets.UTF_8));
+                }
+            } finally {
+                file.delete();
+            }
+        }
+    }
+
+    @Test
+    public void rejectsNonZeroTrailingData() throws Exception {
+        File file = File.createTempFile("trailing-epub", ".epub");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new java.io.FileOutputStream(file))) {
+                out.putNextEntry(new ZipEntry("chapter.xhtml"));
+                out.write(1);
+                out.closeEntry();
+            }
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+                out.write(new byte[]{0, 1, 0});
+            }
+            try (ZipArchive ignored = open(new FileSource(file))) {
+                org.junit.Assert.fail("Non-zero trailing data must not be accepted as padding");
+            } catch (IOException expected) {
+                // Expected.
+            }
+        } finally {
+            file.delete();
+        }
+    }
+
     @Test(expected = IOException.class)
     public void rejectsNonZipFiles() throws Exception {
         File file = File.createTempFile("notzip", ".bin");

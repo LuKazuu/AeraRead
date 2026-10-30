@@ -31,6 +31,42 @@ public class EpubParserTest {
     }
 
     @Test
+    public void parsesAnEpubWithZeroPaddingAfterTheZipEndRecord() throws Exception {
+        java.io.File file = java.io.File.createTempFile("padded-book", ".epub");
+        try {
+            try (java.util.zip.ZipOutputStream out = new java.util.zip.ZipOutputStream(
+                    new java.io.FileOutputStream(file))) {
+                writeEntry(out, "META-INF/container.xml", "<container><rootfiles>"
+                        + "<rootfile full-path=\"book/content.opf\"/>"
+                        + "</rootfiles></container>");
+                writeEntry(out, "book/content.opf", "<package><metadata><title>Test</title>"
+                        + "</metadata><manifest><item id=\"c\" href=\"chapter.xhtml\" "
+                        + "media-type=\"application/xhtml+xml\"/></manifest>"
+                        + "<spine><itemref idref=\"c\"/></spine></package>");
+                writeEntry(out, "book/chapter.xhtml", "<html><body><p>Readable text</p>"
+                        + "</body></html>");
+            }
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+                out.write(new byte[25]);
+            }
+            try (ZipArchive zip = ZipArchive.open(new FileSource(file))) {
+                EpubBook book = new EpubParser(zip).parse("fallback");
+                assertEquals(1, book.chapters.size());
+                assertEquals("Readable text", book.chapters.get(0).blocks.get(0).text);
+            }
+        } finally {
+            file.delete();
+        }
+    }
+
+    private static void writeEntry(java.util.zip.ZipOutputStream out, String name, String text)
+            throws java.io.IOException {
+        out.putNextEntry(new java.util.zip.ZipEntry(name));
+        out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.closeEntry();
+    }
+
+    @Test
     public void parsesMetadataAndChapterStructure() throws Exception {
         EpubBook book = parse("meditations.epub");
         assertEquals("Meditations", book.title);

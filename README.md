@@ -52,13 +52,13 @@ Requires JDK 17+ (JDK 21 recommended) and Android SDK (`platforms;android-37.0`,
 
 ```bash
 bash build.sh                 # interactive menu: 1) APK only  2) Release (build + tag)
-bash build.sh apk             # compile signed R8-optimized AeraRead-1.1.2.apk
-bash build.sh release v1.1.2   # compile APK and create git release tag
+bash build.sh apk             # compile signed R8-optimized AeraRead-1.2.apk
+bash build.sh release v1.2   # compile APK and create git release tag
 bash build.sh test            # run Robolectric Native Graphics test suite
 bash build.sh lint            # run Android lint
 bash build.sh clean           # delete build outputs
 ```
 
 GitHub Actions (`.github/workflows/build.yml`) runs manually via `workflow_dispatch`:
-- **Actions only** — compiles `AeraRead-1.1.2.apk` and uploads it as a workflow artifact.
-- **Release** — compiles `AeraRead-1.1.2.apk`, uploads the workflow artifact, tags the commit, and publishes a GitHub Release.
+- **Actions only** — compiles `AeraRead-1.2.apk` and uploads it as a workflow artifact.
+- **Release** — compiles `AeraRead-1.2.apk`, uploads the workflow artifact, tags the commit, and publishes a GitHub Release.
